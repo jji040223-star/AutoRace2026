@@ -36,6 +36,7 @@ class DepthObstacle(Node):
         p('cam_y', 0.0)
         p('cam_height', 0.175)             # 바닥 → 카메라 광심 [m]
         p('cam_pitch_deg', 0.0)            # 아래로 +
+        p('cam_yaw_deg', 0.0)              # 카메라가 차 진행 방향보다 왼쪽을 보면 + (lane_calib 으로 잼)
         p('step', 4)                       # 픽셀 건너뛰기 (640×480 → 160×120)
         p('min_height', 0.04)              # [m] 바닥에서 이 높이 이상만 (방지턱 0.02 m 걸러짐)
         p('max_height', 0.6)
@@ -81,8 +82,10 @@ class DepthObstacle(Node):
         th = math.radians(g('cam_pitch_deg'))       # 아래로 숙이면 광축이 바닥 쪽
         fwd = z * math.cos(th) - yd * math.sin(th)
         down = z * math.sin(th) + yd * math.cos(th)
-        x = fwd + g('cam_x')
-        y = -xr + g('cam_y')
+        ps = math.radians(g('cam_yaw_deg'))
+        lft = -xr
+        x = fwd * math.cos(ps) - lft * math.sin(ps) + g('cam_x')
+        y = fwd * math.sin(ps) + lft * math.cos(ps) + g('cam_y')
         h = g('cam_height') - down
         keep = (h >= g('min_height')) & (h <= g('max_height')) & (x <= g('max_range') + g('cam_x')) & (np.abs(y) <= g('max_lateral'))
         x, y, h = x[keep], y[keep], h[keep]

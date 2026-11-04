@@ -76,9 +76,16 @@ def _actions(context):
     def stop(why):
         return [LogInfo(msg=f'[drive] {why} → 끝냅니다'), EmitEvent(event=Shutdown(reason=why))]
 
+    sim2d = LaunchConfiguration('perception').perform(context).lower() == 'sim2d'
+
     def after_check(event, _ctx):
         if event.returncode != 0:
             return stop('겹치는 노드가 있음 (위 check_nodes 메시지)')
+        if sim2d:
+            # 2D 시뮬: 표지판·신호등 박스를 시뮬이 직접 낸다 (YOLO·fake_traffic_light 없음) → 바로 리셋·출발
+            start = ([LogInfo(msg='[drive] 2D 시뮬 검출 → 출발선으로 리셋'), reset] if sim and arg('reset_sim')
+                     else [LogInfo(msg='[drive] 2D 시뮬 검출 → 미션 매니저 + 차선 추종 출발'), mission, lane])
+            return [depth, lidar, light, mux, park] + start
         extra_nodes = ([light_yolo] if src == 'yolo' else []) + ([fake] if sim or src == 'fake' else [])
         return [LogInfo(msg='[drive] YOLO 모델 올리는 중 … (몇 초)'), yolo, depth, lidar, light, mux, park] + extra_nodes
 
@@ -122,5 +129,7 @@ def generate_launch_description():
         DeclareLaunchArgument('start_y', default_value='5.58'),
         DeclareLaunchArgument('start_yaw_deg', default_value='0.0'),
         DeclareLaunchArgument('mission_params', default_value='', description='mission_manager 설정을 덮어쓸 yaml (시험용)'),
+        DeclareLaunchArgument('perception', default_value='yolo',
+                              description='yolo (YOLO 노드) | sim2d (2D 시뮬이 표지판·신호등 박스를 직접 냄, YOLO 없이)'),
         OpaqueFunction(function=_actions),
     ])

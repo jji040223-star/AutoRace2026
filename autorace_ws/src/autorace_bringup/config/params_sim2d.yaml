@@ -1,0 +1,33 @@
+# 2D 시뮬 (autorace_sim/sim2d.py) — Isaac 없이 가볍게. 토픽·프레임·리셋 서비스는 Isaac 시뮬과 같다.
+#   ros2 launch autorace_bringup sim2d.launch.py                       # 이 설정
+#   ros2 launch autorace_bringup sim2d.launch.py sim_params:=다른.yaml   # 덮어쓰기 (실차 오차 흉내 등)
+sim2d:
+  ros__parameters:
+    start_x: 0.74                 # Isaac params_sim.yaml robot.start_* 와 같음 (출발선 뒤, 1차로 가운데)
+    start_y: 5.58
+    start_yaw_deg: 0.0
+    camera_hz: 20.0               # 실차 30 Hz. CPU 가 남으면 올린다
+    depth_hz: 10.0
+    # 카메라 실제 자세 — 인식 노드 설정 (lane_follower.yaml camera_*, depth_obstacle.yaml cam_*) 과 다르게 주면 '설정이 실차와 다를 때'
+    cam_height: 0.175
+    cam_pitch_deg: 0.0
+    cam_yaw_deg: 0.0
+    cam_roll_deg: 0.0
+    image_noise: 3.0
+    # 차 (실차 오차 흉내 — 기본 0 = 이상적)
+    tau_v: 0.15
+    tau_w: 0.10
+    v_deadband: 0.0
+    w_deadband: 0.0
+    odom_w_scale: 1.0             # 스키드 미끄럼: 1.2 = 실제 90° 회전을 odom 은 108° 로
+    scan_flip: false
+    depth_dropout: 0.0
+    # 시설물
+    static_limos: true
+    parking_limos: true
+    cones: true
+    cone_layout: "default"
+    traffic_light: true
+    light_s: [10.0, 10.0, 3.0]    # 빨강, 초록, 노랑 [s] (리셋 때 빨강부터)
+    branch_sign: "random"         # A | B | random
+    fake_detections: true         # YOLO 대신 보이는 표지판·신호등 박스 (drive.launch perception:=sim2d)

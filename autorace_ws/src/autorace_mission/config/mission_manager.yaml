@@ -108,6 +108,10 @@ mission_manager:
     m2_min_box_px: 12                   # 갈림길 보조 박스는 판면만 (시뮬 4 m 앞 14 px). YOLO 박스는 지주까지라 더 크다
     m2_confirm_frames: 3                # 같은 결과 이만큼 연속이면 채택. 다른 결과가 다시 확인되면 바꾼다 (표지판은 달리는 중에 바뀐다)
     m2_lock_box_px: 45                  # 이 크기 이상으로 같은 결과를 확인하면 잠금 (분기점 가까이 — 보조 박스 45 px ≈ 표지판 1.2 m 앞). YOLO 박스는 지주까지라 더 일찍 잠김
+    # 연습 모드: 시설물이 없는 미션 건너뛰기 — 예: ["M7", "M8", "M1"] (정차 LIMO·라바콘·신호등이 없는 연습 트랙).
+    # 건너뛴 미션은 다음 미션의 순서 조건에서 지난 것으로 치고, M4 주차는 남은 미션 중 마지막 (M3 → M7 → M8 → M1 순) 이 끝나면 시작.
+    # 대회 때는 반드시 [""] (아무것도 안 건너뜀).
+    skip_missions: [""]
     # M8 라바콘 (Follow-the-Gap, 라이다 /perception/cones — lidar_processor). M2 를 지난 뒤에만 켜짐
     cones_topic: "/perception/cones"
     m8_require_m2: true                 # 순서 힌트 (시험에서 라바콘 앞 출발이면 false)

@@ -59,17 +59,20 @@ DETECTOR_PARAMS = {
 }
 
 
-def bev_src_from_camera(width, height, roi_top_ratio, hfov_deg, cam_height, pitch_deg, near, far, half_width):
+def bev_src_from_camera(width, height, roi_top_ratio, hfov_deg, cam_height, pitch_deg, near, far, half_width, yaw_deg=0.0):
     """바닥 사다리꼴 (카메라 앞 near~far m, 좌우 ±half_width m) 을 핀홀로 투영 → ROI 기준 비율
-    [좌상, 우상, 우하, 좌하] (원본 birdeye_src_ratio 순서). 정사각 픽셀, 주점 = 영상 가운데, pitch + = 아래로."""
+    [좌상, 우상, 우하, 좌하] (원본 birdeye_src_ratio 순서). 정사각 픽셀, 주점 = 영상 가운데, pitch + = 아래로,
+    yaw + = 카메라가 차 진행 방향보다 왼쪽을 봄 (사다리꼴은 차 진행 방향 기준이라 BEV 의 선이 차 축과 나란해진다). yaw 0 = 예전과 같음."""
     fx = (width / 2.0) / math.tan(math.radians(hfov_deg) / 2.0)
-    th = math.radians(pitch_deg)
+    th, ps = math.radians(pitch_deg), math.radians(yaw_deg)
     roi_top = height * roi_top_ratio
     pts = []
     for d, x in ((far, -half_width), (far, half_width), (near, half_width), (near, -half_width)):
-        zc = d * math.cos(th) + cam_height * math.sin(th)        # 카메라 광축 방향 거리
-        yc = cam_height * math.cos(th) - d * math.sin(th)        # 카메라 아래 방향
-        u = width / 2.0 + fx * x / zc
+        X, Y = d, -x                                             # 차 기준 앞, 왼쪽 (카메라 원점)
+        xc = X * math.sin(ps) - Y * math.cos(ps)                 # 카메라 오른쪽
+        yc = -(X * math.sin(th) * math.cos(ps) + Y * math.sin(th) * math.sin(ps)) + cam_height * math.cos(th)   # 아래
+        zc = X * math.cos(th) * math.cos(ps) + Y * math.cos(th) * math.sin(ps) + cam_height * math.sin(th)      # 광축
+        u = width / 2.0 + fx * xc / zc
         v = height / 2.0 + fx * yc / zc
         pts += [u / width, (v - roi_top) / (height - roi_top)]
     return pts
@@ -90,6 +93,7 @@ class LaneFollower(Node):
         p('camera_hfov_deg', 71.0)         # Orbbec Dabai 컬러 (실차·autorace_sim)
         p('camera_height', 0.175)          # 바닥 → 카메라 광심 [m] (sensor_mounts camera_link z 0.03 + base_link 0.145)
         p('camera_pitch_deg', 0.0)         # 아래로 + [deg]
+        p('camera_yaw_deg', 0.0)           # 카메라가 차 진행 방향보다 왼쪽을 보면 + [deg] (lane_calib 으로 잼)
         p('bev_near_m', 0.37)              # 카메라 앞 [m] — 차로 양 끝(±반폭)이 화면 안에 드는 거리부터
         p('bev_far_m', 0.75)              # 멀리 볼수록 코너 안쪽을 파고든다
         p('bev_half_width_m', 0.26)        # 차로 반폭 (선 안쪽 500 mm + 선 20 mm → 선 중심 간 520 mm)
@@ -162,7 +166,7 @@ class LaneFollower(Node):
         else:
             cfg['birdeye_src_ratio'] = bev_src_from_camera(
                 w, h, cfg['roi_top_ratio'], g('camera_hfov_deg'), g('camera_height'), g('camera_pitch_deg'),
-                g('bev_near_m'), g('bev_far_m'), g('bev_half_width_m'))
+                g('bev_near_m'), g('bev_far_m'), g('bev_half_width_m'), g('camera_yaw_deg'))
         self.get_logger().info(f"처리 영상 {w}×{h}, birdeye_src_ratio = [{', '.join(f'{v:.4f}' for v in cfg['birdeye_src_ratio'])}]")
         cfg['stop_line_bev_depth_m'] = float(g('bev_far_m')) - float(g('bev_near_m'))
         cfg['stop_line_lane_m'] = 2.0 * float(g('bev_half_width_m'))
