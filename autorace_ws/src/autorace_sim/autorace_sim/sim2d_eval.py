@@ -3,11 +3,13 @@
   ros2 run autorace_sim sim2d_eval [--until parking_done|mission_done|none] [--timeout 400] [--frames /tmp/f --every 5]
 
   --until parking_done : /parking/state DONE 또는 FAIL 이면 끝 (기본)
-  --frames DIR         : 상태가 바뀔 때와 --every 초마다 카메라 영상·/lane/debug 를 png 로 저장
+  --frames DIR         : 상태가 바뀔 때와 --every 초마다 카메라 영상·/lane/debug 를 png 로 저장,
+                         끝에 경로 (path.csv: 시각, x, y, yaw, 미션 상태) 와 트랙 위 경로 그림 (path.png)
 끝나면 마지막 줄에 'SIM2D_RESULT {json}' 을 찍고, 실패 (충돌·라바콘·FAIL·시간 초과) 가 있으면 exit 1.
 """
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -15,6 +17,7 @@ import cv2
 import numpy as np
 import rclpy
 from rclpy.qos import DurabilityPolicy, QoSProfile, qos_profile_sensor_data
+from geometry_msgs.msg import Pose2D
 from sensor_msgs.msg import Image
 from std_msgs.msg import String
 
@@ -22,6 +25,35 @@ from std_msgs.msg import String
 def to_bgr(msg):
     a = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.step)[:, :msg.width * 3].reshape(msg.height, msg.width, 3)
     return cv2.cvtColor(a, cv2.COLOR_RGB2BGR) if msg.encoding == 'rgb8' else a.copy()
+
+
+def save_path(out, path, events):
+    """경로 CSV + 트랙 위 그림 (미션 상태별 색, 충돌·라바콘·선 밟음 표시)."""
+    import csv
+    from ament_index_python.packages import get_package_share_directory
+    os.makedirs(out, exist_ok=True)
+    with open(os.path.join(out, 'path.csv'), 'w', newline='') as f:
+        w = csv.writer(f)
+        w.writerow(['t', 'x', 'y', 'yaw', 'mission', 'parking'])
+        w.writerows(path)
+    track = json.load(open(os.path.join(get_package_share_directory('autorace_track'), 'data', 'track_elements.json')))
+    sc, mg = 100.0, 20                      # 1 cm/px
+    img = np.full((int(6 * sc) + 2 * mg, int(10 * sc) + 2 * mg, 3), (46, 52, 54), np.uint8)
+
+    def px(x, y):
+        return int(mg + x * sc), int(mg + (6 - y) * sc)
+    for e in track['elements']:
+        if not e.get('painted'):
+            continue
+        col = (67, 170, 229) if e['class'] in ('road_edge', 'zigzag') else (202, 218, 223)
+        cv2.fillPoly(img, [np.array([px(x / 1000, y / 1000) for x, y in e['exterior']], np.int32)], col)
+    colors = {'LANE': (0, 255, 0), 'M7_AVOID': (255, 0, 255), 'M8_AVOID': (255, 128, 0), 'M4_PARKING': (0, 200, 255)}
+    for (t0, x0, y0, *_), (t1, x1, y1, _, mis, _) in zip(path, path[1:]):
+        cv2.line(img, px(x0, y0), px(x1, y1), colors.get(mis, (0, 0, 255)), 2)
+    for e in events:
+        if e['kind'] in ('collide', 'cone') and e['x'] is not None:
+            cv2.circle(img, px(e['x'], e['y']), 8, (0, 0, 255), 2)
+    cv2.imwrite(os.path.join(out, 'path.png'), img)
 
 
 def main():
@@ -84,6 +116,13 @@ def main():
     node.create_subscription(String, '/mission/state', on_state('mission'), 10)
     node.create_subscription(String, '/parking/state', on_state('parking'), 10)
     node.create_subscription(String, '/parking/result', lambda m: st.update(parking_result=m.data), 10)
+    path = []
+
+    def on_pose(m):
+        if st['status'] is not None and st['t0'] is not None:
+            if not path or math.dist(path[-1][1:3], (m.x, m.y)) > 0.01:
+                path.append((round(t_now() - st['t0'], 2), m.x, m.y, m.theta, st['mission'] or '', st['parking'] or ''))
+    node.create_subscription(Pose2D, '/sim2d/pose', on_pose, 10)
     node.create_subscription(Image, '/camera/color/image_raw', lambda m: st.update(img=to_bgr(m)), qos_profile_sensor_data)
     node.create_subscription(Image, '/lane/debug', lambda m: st.update(dbg=to_bgr(m)), qos_profile_sensor_data)
     reason = 'timeout'
@@ -108,6 +147,8 @@ def main():
                mission_states=st['states'].get('mission', []), parking_states=st['states'].get('parking', []),
                parking_result=st['parking_result'], branch=s.get('branch'), final=dict(x=s.get('x'), y=s.get('y')),
                odom_err_m=s.get('odom_err_m'), frames_saved=st['saved'])
+    if a.frames and path:
+        save_path(a.frames, path, st['events'])
     print('SIM2D_RESULT ' + json.dumps(res, ensure_ascii=False), flush=True)
     bad = bool(s.get('collisions')) or bool(s.get('knocked')) or reason in ('timeout', 'parking FAIL')
     node.destroy_node()

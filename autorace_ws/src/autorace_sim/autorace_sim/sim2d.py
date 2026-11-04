@@ -546,8 +546,15 @@ class Sim2D(Node):
                 dmin = min(dmin, float(self.yellow_dist[i, j]))
         self.last_line = dmin
         self.stats['min_line_m'] = min(self.stats['min_line_m'], dmin)
-        if dmin < 0.02:                     # 바퀴 접지 반폭 (~2 cm) 안에 노란 선
+        touching = dmin < 0.02              # 바퀴 접지 반폭 (~2 cm) 안에 노란 선
+        if touching:
             self.stats['touch_s'] += dt
+        if touching != getattr(self, '_touching', False):
+            self._touching = touching
+            if touching:
+                self.get_logger().warn(f'[sim2d] 바퀴가 노란 선을 밟음 — 차 ({self.x:.2f}, {self.y:.2f}) yaw {math.degrees(self.yaw):.0f}°')
+            else:
+                self.get_logger().info(f'[sim2d] 노란 선에서 벗어남 — 차 ({self.x:.2f}, {self.y:.2f})')
         if self.prev_xy is not None:
             self.stats['dist_m'] += math.dist(self.prev_xy, (self.x, self.y))
         self.prev_xy = (self.x, self.y)

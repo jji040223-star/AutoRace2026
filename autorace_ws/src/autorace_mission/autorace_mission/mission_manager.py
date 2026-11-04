@@ -153,7 +153,10 @@ class MissionManager(Node):
         p('m7_oblique_deg', 25.0)          # 이보다 비스듬히 (또는 범퍼 15 cm 안) 본 관측은, 앞에서 본 관측이 3 개 넘게 있으면 상자에 안 넣음
         p('m7_side_no_len', True)          # 옆에서 본·화각 가장자리에 걸린 관측은 가정 길이를 안 붙임 (false = 11-02 까지의 동작)
         p('m7_cam_x', 0.084)               # base_link → 카메라 [m] (depth_obstacle cam_x 와 같게)
-        p('m7_cam_hfov_deg', 71.0)         # 뎁스 가로 화각 (Orbbec Dabai)
+        p('m7_cam_hfov_deg', 71.0)         # 뎁스 가로 화각 (Orbbec Dabai 컬러 기준 — 실차는 뎁스 camera_info 로 확인)
+        p('m7_inside_margin_m', 0.05)      # 보인 점 가운데가 기억 상자 + 이 여유 안이면 같은 장애물 (조각 관측)
+        p('m7_front_match_m', 0.08)        # 그때 보인 가까운 면이 상자 앞면에서 이보다 안쪽이면 앞면 관측이 아님 (가려진 뒷부분) → 상자에 안 넣음
+        p('m7_cam_yaw_deg', 0.0)           # 카메라 좌우 각도 (depth_obstacle cam_yaw_deg 와 같게, lane_calib 으로 잼)
         p('m7_fov_edge_deg', 4.0)          # 관측의 가까운 끝이 화각 경계에서 이 안이면 '잘린 관측'
         p('m7_merge_m', 0.3)               # 관측 중심이 이 안이면 같은 장애물 (각도마다 보이는 면이 달라 0.2 m 로는 한 LIMO 가 둘로 기억됐다.
                                            # 정차 LIMO 끼리는 0.52 m 이상 떨어져 있다)       # 뎁스는 앞면만 보므로 장애물 길이를 이만큼으로 가정 (LIMO 0.322)
@@ -552,28 +555,50 @@ class MissionManager(Node):
             side_view = (abs(math.atan2((o.y_left + o.y_right) / 2, max(o.x_near, 0.05))) > math.radians(g('m7_oblique_deg'))
                          or o.x_near < CAR_HALF_L + 0.15)
             # base_link 상자 → 오도메트리 좌표 꼭짓점 (뒷면은 안 보이므로 앞면 + 가정 길이).
-            # 옆에서 본 관측 (m7_side_no_len) 은 가정 길이를 안 붙인다: 화면 가장자리에 옆 차로 LIMO 옆면 끝만 보일 때 그 끝을 앞면으로 보고
-            # 0.33 m 를 앞으로 늘리면 실제보다 0.3 m 앞에 상자가 생기고, 기억한 상자와 중심이 m7_merge_m 넘게 떨어져 새 장애물이 된다
-            # (2D 시뮬 11-04: 가운데 차로에 없는 장애물 → 차로 변경 못 하고 멈춤). 보인 범위만 쓰면 기억한 상자와 합쳐져 버려진다.
-            # 화각 가장자리에 걸린 관측도 같다: 옆 LIMO 의 차 쪽 끝이 화면 밖으로 잘려 먼 쪽 옆면만 보이는데, 차로를 바꾸느라 차가
-            # 비스듬하면 side_view 각도 조건을 빠져나가 가정 길이가 붙는다 (2D 시뮬 11-04: 바로 옆 가운데 차로에 0.3 m 가짜 상자)
-            edge = math.degrees(math.atan2(max(abs(o.y_left), abs(o.y_right)), max(o.x_near - g('m7_cam_x'), 0.01)))
-            clipped = edge > g('m7_cam_hfov_deg') / 2 - g('m7_fov_edge_deg')
+            # m7_side_no_len: 옆에서 본·화각 가장자리에 잘린 관측은 '기억과 합칠지' 를 가정 길이 없는 상자로 판단한다.
+            #   옆 차로 LIMO 를 지나갈 때 화면에 옆면 끝만 보이면 그 끝을 앞면으로 보고 0.33 m 를 앞으로 늘려, 실제보다 0.3 m 앞에
+            #   상자가 생기고 기억한 상자와 중심이 m7_merge_m 넘게 떨어져 새 장애물이 됐다 (2D 시뮬 11-04: 가운데 차로에 없는 장애물
+            #   → 차로 변경 못 하고 멈춤). 차로 변경 중 차가 비스듬하면 side_view 각도 조건을 빠져나가므로 화각 경계도 본다.
+            #   처음 보는 장애물 (합칠 기억이 없음) 은 예전처럼 가정 길이를 붙여 보수적으로 등록 (앞 LIMO 에 가려졌다가 옆에서
+            #   처음 보이는 LIMO 의 뒷부분을 모르고 일찍 끼어들지 않게 — 리뷰 11-04). 합칠 때는 상자에 안 넣고 seen 만 갱신.
+            hh = g('m7_cam_hfov_deg') / 2 - g('m7_fov_edge_deg')
+            clipped = any(abs(math.degrees(math.atan2(y, max(o.x_near - g('m7_cam_x'), 0.01))) - g('m7_cam_yaw_deg')) > hh
+                          for y in (o.y_left, o.y_right))
             no_len = g('m7_side_no_len') and (side_view or clipped)
-            x2 = o.x_far if no_len else max(o.x_far, o.x_near + g('m7_obstacle_len_m'))
             yr, yl = o.y_right, o.y_left
             if g('m7_obstacle_width_m') > 0 and abs((yl + yr) / 2) > g('m7_side_min_m'):
                 if (yl + yr) / 2 > 0:      # 왼쪽 장애물: 먼 옆면 = 왼쪽 끝
                     yl = max(yl, yr + g('m7_obstacle_width_m'))
                 else:
                     yr = min(yr, yl - g('m7_obstacle_width_m'))
-            pts = [(px + c * bx - s * by, py + s * bx + c * by)
-                   for bx in (o.x_near, x2) for by in (yr, yl)]
+
+            def quad(x2):
+                return [(px + c * bx - s * by, py + s * bx + c * by) for bx in (o.x_near, x2) for by in (yr, yl)]
+            full = quad(max(o.x_far, o.x_near + g('m7_obstacle_len_m')))
+            pts = quad(o.x_far) if no_len else full
             cx, cy = sum(p[0] for p in pts) / 4, sum(p[1] for p in pts) / 4
-            for m in self._obs:            # 같은 장애물 (중심 m7_merge_m 안) 이면 관측을 모은다 (상자는 관측별 범위의 중앙값)
-                if math.dist(m['c'], (cx, cy)) < g('m7_merge_m'):
-                    if side_view and len(m['quads']) >= 3:
-                        m['seen'] = now    # 앞에서 본 관측이 이미 있으면 상자는 그대로, 봤다는 것만
+            # 실제로 보인 점 (가정 길이·폭 없이) 의 가운데가 기억한 상자 안 (m7_inside_margin_m 여유) 이면 같은 장애물이다.
+            # 옆면 끝·화각에 잘린 끝·앞 LIMO 에 가려 뒷부분만 보인 조각은 가정 길이를 붙이면 중심이 0.3 m 넘게 옮겨져
+            # 새 (가짜) 장애물이 됐다 (2D 시뮬 11-04). 같은 LIMO 의 조각이면 반드시 그 상자 안에 있다.
+            seen_c = (px + c * (o.x_near + o.x_far) / 2 - s * (o.y_left + o.y_right) / 2,
+                      py + s * (o.x_near + o.x_far) / 2 + c * (o.y_left + o.y_right) / 2)
+            inside, front_a = (self.obs_containing(seen_c, g('m7_inside_margin_m'),
+                                                   (px + c * o.x_near - s * (o.y_left + o.y_right) / 2,
+                                                    py + s * o.x_near + c * (o.y_left + o.y_right) / 2))
+                               if g('m7_side_no_len') else (None, None))
+            fragment = inside is not None and (no_len or side_view or front_a > g('m7_front_match_m'))
+            if fragment:
+                inside['seen'] = now           # 조각 관측 (옆·잘림·앞면이 아닌 뒷부분) — 상자는 그대로
+                cands = []
+            else:
+                cands = [inside] if inside is not None else self._obs
+            for m in cands:                # 같은 장애물 (중심 m7_merge_m 안) 이면 관측을 모은다 (상자는 관측별 범위의 중앙값)
+                if m is inside or math.dist(m['c'], (cx, cy)) < g('m7_merge_m'):
+                    if (side_view and len(m['quads']) >= 3) or no_len:
+                        # 앞에서 본 관측이 이미 있으면 상자는 그대로, 봤다는 것만. 길이 없이 본 (옆·잘린) 관측은 같은 장애물을 찾는 데만
+                        # 쓰고 상자에는 안 넣는다 — 차로 변경 중 옆 LIMO 를 오래 보면 짧은 관측이 과반이 돼 중앙값 상자가 다시
+                        # 짧아지므로 (리뷰 11-04)
+                        m['seen'] = now
                         break
                     m['quads'] = (m['quads'] + [pts])[-12:]
                     cs = [(sum(p[0] for p in q) / 4, sum(p[1] for p in q) / 4) for q in m['quads']]
@@ -581,7 +606,9 @@ class MissionManager(Node):
                     m['seen'] = now
                     break
             else:
-                self._obs.append({'quads': [pts], 'c': (cx, cy), 'seen': now})
+                if not fragment:           # 합칠 기억이 없음 = 처음 보는 장애물 → 가정 길이를 붙여 보수적으로
+                    fx, fy = sum(p[0] for p in full) / 4, sum(p[1] for p in full) / 4
+                    self._obs.append({'quads': [full], 'c': (fx, fy), 'seen': now})
             mid = (o.y_left + o.y_right) / 2
             if (abs(mid) < g('m7_trigger_half_m') and o.x_near < g('m7_trigger_m')
                     and o.y_left - o.y_right >= g('m7_min_width_m') and o.height >= g('m7_min_height_m')):
@@ -593,6 +620,22 @@ class MissionManager(Node):
         if (self.state in ('LANE', 'M6_SLOW') and self._m7_hits >= g('m7_confirm_frames') and not two_yellow
                 and not turning and not self._m7_done and not self._m2['done'] and not self._m8_done and 'M7' not in self.skip):
             self.m7_enter()
+
+    def obs_containing(self, q, margin, near=None):
+        """점 q (odom) 를 품는 기억 장애물 (관측별 상자 중 하나라도, 사방 margin 여유) 과, near 점이 그 상자 앞면에서
+        안쪽으로 얼마나 들어가 있는지 [m] (앞면 관측이면 ≈ 0). 없으면 (None, None)."""
+        for m in self._obs:
+            for quad in m['quads']:
+                p0, p1, p2 = quad[0], quad[1], quad[2]          # (앞, 오른쪽), (앞, 왼쪽), (뒤, 오른쪽)
+                ux, uy = p2[0] - p0[0], p2[1] - p0[1]
+                vx, vy = p1[0] - p0[0], p1[1] - p0[1]
+                lu, lv = math.hypot(ux, uy) or 1e-6, math.hypot(vx, vy) or 1e-6
+                a = ((q[0] - p0[0]) * ux + (q[1] - p0[1]) * uy) / lu
+                b = ((q[0] - p0[0]) * vx + (q[1] - p0[1]) * vy) / lv
+                if -margin <= a <= lu + margin and -margin <= b <= lv + margin:
+                    an = 0.0 if near is None else ((near[0] - p0[0]) * ux + (near[1] - p0[1]) * uy) / lu
+                    return m, an
+        return None, None
 
     def prune_obs(self, now):
         """장애물 기억 정리. 차 가까이 (1 m 안) 붙은 것은 뎁스에 안 보여도 (카메라에 너무 가까움) 시간으로 지우지 않고,
