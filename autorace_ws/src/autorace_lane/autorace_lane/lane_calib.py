@@ -11,6 +11,8 @@
 결과: lane_follower.yaml (camera_height, camera_pitch_deg, camera_yaw_deg, yellow_hsv_*) 와
       depth_obstacle.yaml (cam_height, cam_pitch_deg, cam_yaw_deg) 에 넣을 값, 보정 전·후 BEV 그림 (--out).
 가정: 카메라 좌우 기울기 (roll) 0, 렌즈 왜곡 없음, 주점 = 영상 가운데. 사진에서 두 노란 선이 화면 아래까지 보여야 한다.
+주의: 잰 좌우 각도 = 카메라 장착 각도 + 차가 차로와 비뚤어진 각도. 차를 1° 비뚤게 세우면 1° 가 섞인다 →
+      차를 다시 세워 2~3 장 찍고 평균을 쓴다 (높이·숙인 각도는 차 방향과 거의 무관).
 """
 import argparse
 import math
@@ -134,7 +136,7 @@ def solve(lines, K, lane_m):
                 rms_px=math.sqrt(e0 / 2), vp=(u_vp, v_vp))
 
 
-def suggest_hsv(bgr, lines, mask_lo):
+def suggest_hsv(bgr, lines):
     """맞춘 선 위 (±1 px) 픽셀의 HSV 2~98 % 범위 + 여유 → 노란색 문턱 제안, 그리고 매트와 겹치는지."""
     hsv = cv2.cvtColor(bgr, cv2.COLOR_BGR2HSV)
     h, w = hsv.shape[:2]
@@ -225,7 +227,7 @@ def main():
             cv2.imwrite(os.path.join(a.out, 'mask.png'), mask)
         sys.exit(2)
     sol = solve(lines, K, a.lane_m)
-    lo_s, hi_s, mat_in, raw = suggest_hsv(bgr, lines, a.yellow_lo)
+    lo_s, hi_s, mat_in, raw = suggest_hsv(bgr, lines)
     src_new = bev_src_from_camera(480, int(round(h * 480 / w)), 0.35, a.hfov, sol['height_m'], sol['pitch_deg'],
                                   a.near, a.far, 0.26, sol['yaw_deg'])
     src_old = bev_src_from_camera(480, int(round(h * 480 / w)), 0.35, a.hfov, 0.175, 0.0, a.near, a.far, 0.26, 0.0)

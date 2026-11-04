@@ -5,6 +5,9 @@
 그다음 다른 터미널에서:
   ros2 launch autorace_mission drive.launch.py perception:=sim2d                    # 주행 (YOLO 대신 시뮬 검출)
   ros2 run autorace_sim sim2d_eval --until parking_done --timeout 400               # 판정 요약
+YOLO 로 시험할 때 (drive.launch perception:=yolo): fake_detections:=false — 시뮬 검출과 겹치지 않게.
+영상이 3 Hz 정도로만 오면 (UDP 조각 유실 — 이 PC 수신 버퍼가 작을 때) 모든 터미널에서:
+  export FASTRTPS_DEFAULT_PROFILES_FILE=$(ros2 pkg prefix autorace_bringup)/share/autorace_bringup/config/fastdds_shm.xml
 """
 import os
 
@@ -20,11 +23,15 @@ def _nodes(context):
     extra = LaunchConfiguration('sim_params').perform(context)
     if extra:
         params.append(extra)
-    return [Node(package='autorace_sim', executable='sim2d', name='sim2d', output='screen', parameters=params)]
+    fake = LaunchConfiguration('fake_detections').perform(context).lower() == 'true'
+    return [Node(package='autorace_sim', executable='sim2d', name='sim2d', output='screen',
+                 parameters=params + [{'fake_detections': fake}])]
 
 
 def generate_launch_description():
     return LaunchDescription([
         DeclareLaunchArgument('sim_params', default_value='', description='params_sim2d.yaml 을 덮어쓸 yaml'),
+        DeclareLaunchArgument('fake_detections', default_value='true',
+                              description='true = 시뮬이 표지판·신호등 박스를 냄 (drive perception:=sim2d). YOLO 로 시험하면 false'),
         OpaqueFunction(function=_nodes),
     ])

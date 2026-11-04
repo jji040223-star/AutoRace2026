@@ -151,6 +151,10 @@ class MissionManager(Node):
                                            # 비스듬히 본 LIMO 중심 3–4.5 cm, 앞에서 본 것 1.5–2 cm) → 가까운 옆면 + 이 폭 (0 = 끔)
         p('m7_side_min_m', 0.10)           # 장애물 가운데가 차 옆으로 이만큼 넘게 떨어져 있을 때만 (바로 앞은 양 옆면이 다 보임)
         p('m7_oblique_deg', 25.0)          # 이보다 비스듬히 (또는 범퍼 15 cm 안) 본 관측은, 앞에서 본 관측이 3 개 넘게 있으면 상자에 안 넣음
+        p('m7_side_no_len', True)          # 옆에서 본·화각 가장자리에 걸린 관측은 가정 길이를 안 붙임 (false = 11-02 까지의 동작)
+        p('m7_cam_x', 0.084)               # base_link → 카메라 [m] (depth_obstacle cam_x 와 같게)
+        p('m7_cam_hfov_deg', 71.0)         # 뎁스 가로 화각 (Orbbec Dabai)
+        p('m7_fov_edge_deg', 4.0)          # 관측의 가까운 끝이 화각 경계에서 이 안이면 '잘린 관측'
         p('m7_merge_m', 0.3)               # 관측 중심이 이 안이면 같은 장애물 (각도마다 보이는 면이 달라 0.2 m 로는 한 LIMO 가 둘로 기억됐다.
                                            # 정차 LIMO 끼리는 0.52 m 이상 떨어져 있다)       # 뎁스는 앞면만 보므로 장애물 길이를 이만큼으로 가정 (LIMO 0.322)
         p('m7_block_m', 1.2)               # 내 차로 앞이 이 거리 안에서 막히면 갈 차로를 정한다 (실제로 꺾는 때는 쓸기 검사가 정함)
@@ -255,6 +259,9 @@ class MissionManager(Node):
         p('skip_missions', [''])
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.skip = {str(k).strip().upper() for k in g('skip_missions') if str(k).strip()}
+        if self.skip - {'M3', 'M7', 'M8', 'M1'}:
+            self.get_logger().warn(f"skip_missions 에 모르는 값 {sorted(self.skip - {'M3', 'M7', 'M8', 'M1'})} — "
+                                   f"건너뛸 수 있는 것은 M3, M7 (M2 같이), M8, M1 (M5·M6 은 표지판·노면이 없으면 저절로 안 켜짐)")
 
         self.state = 'LANE'
         self._pos = None                   # 지금 오도메트리 (x, y)
@@ -305,23 +312,19 @@ class MissionManager(Node):
                                + (f", 건너뜀 {sorted(self.skip)} (연습 모드)" if self.skip else ''))
 
     # ---------------------------------------------------------------- 공통
+    ORDER = ('M3', 'M7', 'M2', 'M8', 'M1')   # 순서 조건이 걸린 미션 (M2 는 M7 안에서 — M7 을 건너뛰면 같이 건너뜀)
+
     def done_or_skipped(self, key):
-        """미션이 끝났거나 연습 모드로 건너뜀 — 다음 미션의 순서 조건용."""
-        if key in self.skip:
-            return True
-        return {'M3': self._m3_done, 'M7': self._m7_done, 'M2': self._m2['done'] or 'M7' in self.skip,
-                'M8': self._m8_done, 'M1': self._m1_done}[key]
+        """미션이 끝났는지 — 다음 미션의 순서 조건용. 건너뛴 미션은 '자기 앞 미션이 끝났을 때' 지난 것으로 친다
+        (건너뛴 미션 때문에 앞쪽 순서 조건이 통째로 사라지지 않게: M8 을 건너뛰어도 M1 은 M2 를 지난 뒤에만)."""
+        i = self.ORDER.index(key)
+        if key in self.skip or (key == 'M2' and 'M7' in self.skip):
+            return True if i == 0 else self.done_or_skipped(self.ORDER[i - 1])
+        return {'M3': self._m3_done, 'M7': self._m7_done, 'M2': self._m2['done'], 'M8': self._m8_done, 'M1': self._m1_done}[key]
 
     def m4_ready(self):
-        """주차를 시작할 때: M1 이 끝났거나 (포기 포함), M1 을 건너뛰면 그 앞의 남은 마지막 미션이 끝났을 때."""
-        if self._m1_done:
-            return True
-        if 'M1' not in self.skip:
-            return False
-        for key in ('M8', 'M7', 'M3'):     # 뒤에서부터: 건너뛰지 않은 마지막 미션
-            if key not in self.skip:
-                return self.done_or_skipped(key)
-        return True
+        """주차를 시작할 때: M1 이 끝났거나 (포기 포함), M1 을 건너뛰면 그 앞의 남은 마지막 미션까지 끝났을 때."""
+        return self._m1_done or ('M1' in self.skip and self.done_or_skipped('M1'))
 
     def start_parking(self, why):
         self._m4_started = True
@@ -545,8 +548,19 @@ class MissionManager(Node):
         for o in msg.obstacles:
             if o.y_left - o.y_right > g('m7_max_width_m'):
                 continue                   # LIMO (0.22 m) 보다 훨씬 넓음 = 바닥 (기울어짐)·벽 — 기억에도 안 넣음
-            # base_link 상자 → 오도메트리 좌표 꼭짓점 (뒷면은 안 보이므로 앞면 + 가정 길이)
-            x2 = max(o.x_far, o.x_near + g('m7_obstacle_len_m'))
+            # 비스듬히·옆에서 본 관측: 보이는 면이 앞면이 아니라 가정 길이가 엉뚱한 쪽으로 붙는다 (차 뒤까지 늘어난 상자로 갇힘, 11-01)
+            side_view = (abs(math.atan2((o.y_left + o.y_right) / 2, max(o.x_near, 0.05))) > math.radians(g('m7_oblique_deg'))
+                         or o.x_near < CAR_HALF_L + 0.15)
+            # base_link 상자 → 오도메트리 좌표 꼭짓점 (뒷면은 안 보이므로 앞면 + 가정 길이).
+            # 옆에서 본 관측 (m7_side_no_len) 은 가정 길이를 안 붙인다: 화면 가장자리에 옆 차로 LIMO 옆면 끝만 보일 때 그 끝을 앞면으로 보고
+            # 0.33 m 를 앞으로 늘리면 실제보다 0.3 m 앞에 상자가 생기고, 기억한 상자와 중심이 m7_merge_m 넘게 떨어져 새 장애물이 된다
+            # (2D 시뮬 11-04: 가운데 차로에 없는 장애물 → 차로 변경 못 하고 멈춤). 보인 범위만 쓰면 기억한 상자와 합쳐져 버려진다.
+            # 화각 가장자리에 걸린 관측도 같다: 옆 LIMO 의 차 쪽 끝이 화면 밖으로 잘려 먼 쪽 옆면만 보이는데, 차로를 바꾸느라 차가
+            # 비스듬하면 side_view 각도 조건을 빠져나가 가정 길이가 붙는다 (2D 시뮬 11-04: 바로 옆 가운데 차로에 0.3 m 가짜 상자)
+            edge = math.degrees(math.atan2(max(abs(o.y_left), abs(o.y_right)), max(o.x_near - g('m7_cam_x'), 0.01)))
+            clipped = edge > g('m7_cam_hfov_deg') / 2 - g('m7_fov_edge_deg')
+            no_len = g('m7_side_no_len') and (side_view or clipped)
+            x2 = o.x_far if no_len else max(o.x_far, o.x_near + g('m7_obstacle_len_m'))
             yr, yl = o.y_right, o.y_left
             if g('m7_obstacle_width_m') > 0 and abs((yl + yr) / 2) > g('m7_side_min_m'):
                 if (yl + yr) / 2 > 0:      # 왼쪽 장애물: 먼 옆면 = 왼쪽 끝
@@ -556,9 +570,6 @@ class MissionManager(Node):
             pts = [(px + c * bx - s * by, py + s * bx + c * by)
                    for bx in (o.x_near, x2) for by in (yr, yl)]
             cx, cy = sum(p[0] for p in pts) / 4, sum(p[1] for p in pts) / 4
-            # 비스듬히·옆에서 본 관측: 보이는 면이 앞면이 아니라 가정 길이가 엉뚱한 쪽으로 붙는다 (차 뒤까지 늘어난 상자로 갇힘, 11-01)
-            side_view = (abs(math.atan2((o.y_left + o.y_right) / 2, max(o.x_near, 0.05))) > math.radians(g('m7_oblique_deg'))
-                         or o.x_near < CAR_HALF_L + 0.15)
             for m in self._obs:            # 같은 장애물 (중심 m7_merge_m 안) 이면 관측을 모은다 (상자는 관측별 범위의 중앙값)
                 if math.dist(m['c'], (cx, cy)) < g('m7_merge_m'):
                     if side_view and len(m['quads']) >= 3:
@@ -638,6 +649,16 @@ class MissionManager(Node):
             pts = [self.m7_frame(p) for p in q]
             ext.append((min(p[0] for p in pts), max(p[0] for p in pts), min(p[1] for p in pts), max(p[1] for p in pts)))
         return tuple(sorted(e[i] for e in ext)[len(ext) // 2] for i in range(4))
+
+    def m7_dump(self):
+        """디버그: 차 위치와 기억한 장애물 상자 (차로 좌표 s 앞, l 왼쪽 — M7 들어간 곳 기준), 차로 가운데 l."""
+        if not self._m7 or self._pos is None:
+            return ''
+        W = self.get_parameter('m7_lane_width_m').value
+        car = self.m7_frame(self._pos)
+        lanes = ', '.join(f'{k}:{self.m7_lane_l(k):+.2f}' for k in range(self.get_parameter('m7_lanes').value))
+        boxes = ', '.join(f's {b[0]:.2f}~{b[1]:.2f} l {b[2]:+.2f}~{b[3]:+.2f}' for b in sorted(self.m7_box(ob) for ob in self._obs))
+        return f'차 s {car[0]:.2f} l {car[1]:+.2f}, 차로 가운데 l [{lanes}] (폭 {W}), 기억 {len(self._obs)} 개: {boxes}'
 
     def m7_frame(self, p):
         o, a = self._m7['origin'], self._m7['axis']
@@ -781,7 +802,7 @@ class MissionManager(Node):
         if count > g('m7_retry_max'):
             m['gave_up'] = True
             self.get_logger().error(f'[M7] 같은 자리 ({self.fmt(m["retry"].at)}) 에서 {count - 1} 번 후진·재시도하고 반대쪽 차로도 '
-                                    f'실패 ({reason}) — 멈춤. 장애물 배치·/perception/obstacle_markers 확인 필요')
+                                    f'실패 ({reason}) — 멈춤. 장애물 배치·/perception/obstacle_markers 확인 필요 | {self.m7_dump()}')
             return
         rf = self.rear_free()
         m['back'] = {'from': self._pos, 't': now}
@@ -893,7 +914,7 @@ class MissionManager(Node):
                                        f'차로 {j} 는 그 장애물 지나고 {"비어 있음" if aj == math.inf else f"{aj:.2f} m 비어 있음"} (s {sc:.2f} m)')
                 k, lt, changing = j, self.m7_lane_l(j), True
             elif rechoose:
-                self.get_logger().info(f'[M7] 다시 골랐지만 옆 차로가 막은 장애물 옆에서 비어 있지 않음 — 차로 {k} 유지 (s {sc:.2f} m)')
+                self.get_logger().info(f'[M7] 다시 골랐지만 옆 차로가 막은 장애물 옆에서 비어 있지 않음 — 차로 {k} 유지 (s {sc:.2f} m) | {self.m7_dump()}')
         ahead_any = any(ahead(j) < math.inf for j in range(g('m7_lanes')))
         if not changing and goal is not None and k != goal and ahead_any:
             # M2: 갈림길 쪽 옆 차로가 지금 차로만큼 비어 있으면 미리 그쪽으로. 앞에 장애물이 없으면 (분리대 옆) 안 옮김

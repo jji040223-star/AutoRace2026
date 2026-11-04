@@ -354,7 +354,7 @@ class Sim2D(Node):
             shade = np.choose(axis, [1.0, 0.8, 0.6]).astype(np.float32)[..., None]
             col = np.broadcast_to(b.color, d.shape).copy() * shade
             if b.kind == 'light':
-                # 앞면 (local −x 쪽, 차를 보는 면) 의 등 세 칸: 위 빨강, 가운데 노랑, 아래 초록
+                # 앞면 (local +x 쪽 = 방향 yaw 쪽, 차를 보는 면) 의 등 세 칸: 위 빨강, 가운데 노랑, 아래 초록
                 p = ol + dl * tn[..., None]
                 zc = (b.z0 + b.z1) / 2
                 for k, (name, rgb) in enumerate((('red', (255, 42, 26)), ('yellow', (255, 176, 0)), ('green', (25, 224, 122)))):
@@ -383,7 +383,7 @@ class Sim2D(Node):
 
     def box_rect(self, b, C, R, W, H):
         """물체가 화면에 차지하는 사각형 (여유 2 px). 안 보이면 None."""
-        if (b.x - C[0]) ** 2 + (b.y - C[1]) ** 2 > 16.0:
+        if (b.x - C[0]) ** 2 + (b.y - C[1]) ** 2 > max(16.0, self.g('sign_range_m') ** 2):
             return None
         pts = np.array([(x, y, z) for x, y in b.corners2d() for z in (b.z0, b.z1)])
         pc = (pts - C) @ R.T
@@ -434,7 +434,7 @@ class Sim2D(Node):
         r = r + self.np_rng.normal(0, g('scan_noise'), n)
         r[(r < g('scan_min')) | (r > g('scan_max'))] = np.inf
         if g('scan_flip'):
-            r = r[::-1].copy()
+            r = np.roll(r[::-1], 1).copy()     # 각 a → −a (인덱스 i ↔ (n − i) % n)
         return r.astype(np.float32)
 
     # ------------------------------------------------------------------ 물리
@@ -516,7 +516,7 @@ class Sim2D(Node):
         self.odom_tw = (ov, ow)
         self.true_w = moved_w
         self.imu_yaw = wrap(self.imu_yaw + moved_w * dt)
-        self.track_stats()
+        self.track_stats(dt)
         self.pub_clock.publish(Clock(clock=stamp(self.sim_t)))
         st = stamp(self.sim_t)
         for key, hz, fn in (('odom', g('odom_hz'), self.publish_odom), ('imu', g('imu_hz'), self.publish_imu),
@@ -536,7 +536,7 @@ class Sim2D(Node):
         self.stats = {'min_line_m': float('inf'), 'touch_s': 0.0, 'dist_m': 0.0, 'since': getattr(self, 'sim_t', 0.0)}
         self.prev_xy = None
 
-    def track_stats(self):
+    def track_stats(self, dt):
         dmin = float('inf')
         c, s = math.cos(self.yaw), math.sin(self.yaw)
         for wx, wy in WHEELS:
@@ -547,7 +547,7 @@ class Sim2D(Node):
         self.last_line = dmin
         self.stats['min_line_m'] = min(self.stats['min_line_m'], dmin)
         if dmin < 0.02:                     # 바퀴 접지 반폭 (~2 cm) 안에 노란 선
-            self.stats['touch_s'] += 1.0 / self.g('physics_hz')
+            self.stats['touch_s'] += dt
         if self.prev_xy is not None:
             self.stats['dist_m'] += math.dist(self.prev_xy, (self.x, self.y))
         self.prev_xy = (self.x, self.y)

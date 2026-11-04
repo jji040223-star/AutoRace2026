@@ -30,4 +30,5 @@ sim2d:
     traffic_light: true
     light_s: [10.0, 10.0, 3.0]    # 빨강, 초록, 노랑 [s] (리셋 때 빨강부터)
     branch_sign: "random"         # A | B | random
-    fake_detections: true         # YOLO 대신 보이는 표지판·신호등 박스 (drive.launch perception:=sim2d)
+    fake_detections: true         # YOLO 대신 보이는 표지판·신호등 박스 — drive.launch perception:=sim2d 와 짝.
+                                  # YOLO (perception:=yolo) 로 시험할 때는 sim2d.launch fake_detections:=false (안 그러면 검출이 겹침)
