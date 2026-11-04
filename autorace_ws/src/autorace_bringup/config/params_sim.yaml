@@ -1,0 +1,122 @@
+# mode:=sim 설정 — bringup.launch.py 가 읽는다.
+#   isaac_sim       → Isaac Sim 프로세스 (autorace_sim/isaac/run_sim.py)
+#   sensor_mounts   → 센서 위치. Isaac 센서 배치 + static_transform_publisher (params_real.yaml 과 같은 값 유지)
+#   depth_converter → Isaac 뎁스(32FC1 m)를 실차 Orbbec 드라이버와 같은 16UC1 mm 로 변환
+# 토픽/프레임 이름은 실차(agilexrobotics/limo_ros2 humble 기본값)와 같다.
+
+isaac_sim:
+  ros__parameters:
+    isaacsim_dir: "~/isaacsim"
+    headless: false
+    anti_aliasing: 3                # 렌더 AA: 3 DLSS (Isaac 기본, 차선·표지판 튜닝 기준) | 2 FXAA (M8 뒤 커브에서 차선 이탈 3/8 판 — 쓰지 말 것)
+    realtime: true                  # 시뮬 시간을 벽시계에 맞춤 (false: 가능한 빨리)
+    physics_hz: 120
+    render_hz: 30
+    odom_rate_hz: 50.0              # 실차 limo_base control_rate 50
+    publish_odom_tf: true           # 실차 limo_base pub_odom_tf (launch 기본 true)
+    reset_service: "/sim/reset"     # std_srvs/Trigger — Isaac 을 끄지 않고 LIMO·라바콘·미션 주기를 처음 상태로 (ros2 run autorace_sim reset_sim)
+    lighting:
+      dome_intensity: 600.0
+      sun_intensity: 2500.0
+    track:
+      usd: ""                       # 비우면 autorace_track/usd/autorace_track.usda
+      floor_static_friction: 0.8    # 바닥 마찰 — USD 값을 실행 시 덮어씀 (재빌드 불필요)
+      floor_dynamic_friction: 0.7
+    missions:                       # 미션 시설물 (규정집 M1–M8). USD 는 LimoIsaacSIM/autorace_2026 에서 만든 것 (config/missions.yaml)
+      enabled: true
+      usd: "~/LimoIsaacSIM/autorace_2026/data/mission/autorace_2026_missions.usda"
+      # 바뀌는 시설물의 주기 — 시뮬레이션 시간 [s] (/clock). 시뮬을 멈췄다 다시 시작하면 0 초부터
+      traffic_light_s: {red: 10.0, green: 10.0, yellow: 3.0}   # M1 신호등: 적 → 녹 → 황 → 적, 0 초인 색은 건너뜀
+      traffic_light_start: "red"    # 0 초에 켜질 색
+      branch_sign_period_s: 0.0     # M2 갈림길 표지판: 0 = 한 판 동안 고정 (실제 대회). > 0 이면 이 주기로 A(좌회전) ↔ B(우회전) (시험용)
+      branch_sign_start: "A"        # branch_sign_random false 일 때의 표지판
+      branch_sign_random: true      # 주기 0 이면: 리셋 (판 시작) 마다 A/B 무작위, 그 판 동안 고정. 주기 > 0 이면: 주기마다 무작위
+      ad_slide_period_s: 3.0        # M1 방해 광고판 화면 넘김, 0 = 첫 화면 고정
+      cones:                        # M8 라바콘 배치 (isaac/cone_layouts.py). 리셋 때 이 배치로 옮긴다. 판 중간에 /sim/cone_layout 으로 다음 리셋 배치를 바꿀 수 있음
+        layout: "default"           # default (USD 그대로, S) | straight | curve | s | narrow | wide | jitter | random
+        start: [0.72, 2.05]         # 아래는 LimoIsaacSIM/autorace_2026/config/missions.yaml cones 와 같은 값 (USD 를 만든 값)
+        heading: 90
+        pairs: 7
+        pitch: 0.30
+        half_gap: 0.25
+        sway: 0.12
+        sway_period: 1.8
+    robot:
+      usd: ""                       # 비우면 Isaac 에셋 서버 Isaac/Robots/AgilexRobotics/limo/limo.usd (오프라인: ~/isaac_assets/limo/limo.usd 등)
+      prim_path: "/World/limo"
+      start_x: 0.74                 # 출발선 앞면 x = 0.95 m. 차체 앞끝(+0.16 m)이 선 5 cm 뒤
+      start_y: 5.58                 # 1차로 중앙
+      start_z: 0.0
+      start_yaw_deg: 0.0            # +x 방향 (출발선 → '천천히' 쪽)
+      wheel_radius: 0.045
+      track_width: 0.175            # 좌우 바퀴 접지 중심 간격 (limo.usd 기하)
+      wheelbase: 0.2
+      base_height: 0.145            # 바닥 → base_link (바퀴 반지름 0.045 + 0.1)
+      max_linear_vel: 1.0
+      max_angular_vel: 2.5
+      cmd_vel_timeout: 0.5          # s. 이 시간 동안 /cmd_vel 이 없으면 정지
+      drive:                        # 자세한 이유: autorace_sim/isaac/limo_drive.py 머리말
+        model: "tire"               # tire: 미끄럼 비례 타이어 힘 (μ = floor_static_friction 이 상한) | physx: PhysX 마찰 그대로
+        max_wheel_speed: 1.5        # m/s (바퀴 둘레 속도 상한)
+        tire:
+          c_long: 50.0              # N/(m/s) 바퀴당 종방향 미끄럼 강성
+          c_lat: 30.0               # N/(m/s) 바퀴당 횡방향 미끄럼 강성 (낮을수록 잘 돎)
+        tracking:                   # 몸체 속도 되먹임 (실차 하위 제어기 흉내). false 면 기구학 그대로
+          enabled: true
+          kp_v: 0.5
+          ki_v: 2.0
+          kp_w: 1.0
+          ki_w: 5.0
+          integral_limit: 1.0
+    lidar:                          # EAI X2L
+      min_range: 0.12
+      max_range: 8.0
+      resolution_deg: 0.96          # 3000 Hz / 8 Hz ≈ 375 점/회전
+      rate_hz: 8.0
+    camera:                         # Orbbec Dabai (컬러 기준 하나의 카메라로 컬러·뎁스·포인트클라우드)
+      width: 640
+      height: 480
+      hfov_deg: 71.0
+      rate_hz: 30.0
+    imu:
+      rate_hz: 100.0
+    topics:
+      cmd_vel: "/cmd_vel"
+      odom: "/odom"
+      imu: "/imu"
+      scan: "/scan"
+      color_image: "/camera/color/image_raw"
+      color_info: "/camera/color/camera_info"
+      isaac_depth_image: "/isaac/camera/depth/image_raw"   # 변환 전 (depth_converter 입력)
+      depth_info: "/camera/depth/camera_info"
+      points: "/camera/depth/points"
+    frames:
+      odom: "odom"
+      base: "base_link"
+      laser: "laser_link"
+      imu: "imu_link"
+      camera: "camera_link"
+      color_optical: "camera_color_optical_frame"
+      depth_optical: "camera_depth_optical_frame"
+
+sensor_mounts:                      # base_link 기준 [m], [rad] (ROS rpy). base_link = 바닥 위 0.15 m
+  ros__parameters:
+    laser_link:                     # limo_description URDF (실차 tf_pub 는 0.1, 0, 0.05 — README 참고)
+      xyz: [0.103, 0.0, -0.034]
+      rpy: [0.0, 0.0, 0.0]
+      publish_tf: true
+    camera_link:                    # limo_description URDF (ackermann/limo_car)
+      xyz: [0.084, 0.0, 0.03]
+      rpy: [0.0, 0.0, 0.0]
+      publish_tf: true
+    imu_link:                       # 실차 limo_base 가 내는 정적 TF 와 같음 (항등)
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      publish_tf: true
+
+depth_converter:
+  ros__parameters:
+    input_topic: "/isaac/camera/depth/image_raw"
+    output_topic: "/camera/depth/image_raw"
+    min_depth: 0.3                  # Dabai 유효 거리 [m]. 밖은 0 (실차 드라이버와 같이 '측정 없음')
+    max_depth: 3.0

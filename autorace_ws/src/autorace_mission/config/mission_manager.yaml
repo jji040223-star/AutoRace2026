@@ -1,0 +1,155 @@
+# 미션 매니저 (autorace_mission/mission_manager.py). 임시값 = 근거 없이 정한 값, 시뮬·실차에서 맞출 것.
+mission_manager:
+  ros__parameters:
+    detections_topic: "/perception/detections"
+    lane_state_topic: "/lane/state"
+    odom_topic: "/odom"
+    state_topic: "/mission/state"
+    lane_cmd_topic: "/mission/lane_cmd"
+    obstacles_topic: "/perception/obstacles"
+    cmd_vel_topic: "/mission/cmd_vel"   # M7 동안 직접 운전 → cmd_vel_mux
+    imu_topic: "/imu"                   # M7 방향 (자이로 적분, 들어갈 때 odom yaw 에 맞춤)
+    scan_topic: "/scan"                 # M7 후진 때 뒤 확인
+    laser_x: 0.103
+    rate_hz: 20.0
+    # M5 서행 (방지턱)
+    m5_labels: ["slow", "speed_bump"]
+    m5_min_conf: 0.5
+    m5_min_box_px: 20                   # 임시값. 박스 높이 [px] (640×480 영상 기준)
+    m5_confirm_frames: 3
+    m5_speed: 0.15                      # 규정집: 기본 속도(0.3)의 1/2, 0.2 m/s 이하
+    m5_release_m: 1.5                   # 임시값. 표지판을 마지막으로 본 곳부터 [m]
+    # M6 서행 유도선 (지그재그) — 톱니 모양 노란 선은 슬라이딩 윈도우 곡선 피팅 잔차가 커진다 (/lane/state line_resid_px)
+    m6_resid_on: 7.5                    # [px] 시뮬 한 바퀴: 지그재그 8.0–8.7, 직선 2.2–2.4, 코너 최대 6.9. 실차에서 다시 잴 것
+    m6_resid_off: 5.0
+    m6_confirm_frames: 5
+    m6_speed: 0.15
+    m6_release_m: 0.3                   # 임시값. 지그재그가 안 보이고 나서 [m]
+    # M3 보행자 표지판 정지
+    m3_labels: ["crosswalk"]            # YOLO 클래스 이름 (보행자 표지판)
+    m3_min_conf: 0.5
+    m3_min_box_px: 30                   # 시뮬: 표지판 1.3 m 앞에서 박스 높이 38 px
+    m3_confirm_frames: 3
+    m3_approach_speed: 0.15             # 표지판 본 뒤 정지선 찾는 속도
+    m3_min_speed: 0.04                  # 정지 직전 최저 속도
+    m3_kp: 0.5                          # 속도 [m/s] = kp × 정지선까지 남은 거리 [m]
+    m3_cam_to_front_axle_m: 0.016       # 카메라 → 앞바퀴 축 [m] (시뮬 sensor_mounts 기준. 실차는 실측)
+    m3_stop_gap_m: 0.02                 # 앞바퀴 축을 정지선 가까운 끝에서 이만큼 앞에 세우도록 명령 — 정지 명령 뒤 미끄러짐 (시뮬 0.04 m/s 에서 1.6–1.8 cm) 보정
+    m3_line_match_m: 0.10               # 잡은 정지선과 이만큼 넘게 다른 측정은 다른 선으로 보고 버림
+    m3_search_m: 2.0                    # 표지판 본 뒤 이 거리 안에 정지선이 안 보이면 포기
+    m3_wait_s: 4.0                      # 규정: 완전 정지 후 3 s 이상, 15 s 안에 발진
+    m3_still_mps: 0.01
+    m3_exit_m: 0.5
+    m3_cooldown_m: 3.0                  # M3 끝난 뒤 보행자 표지판 무시 거리
+    # M7 3차선 정적 장애물 회피 (뎁스 장애물 + 오도메트리, 차로 번호 ±1 기억)
+    m7_trigger_m: 1.2                   # 내 차로 앞 이 거리 안 장애물이면 켜짐
+    m7_trigger_half_m: 0.2
+    m7_min_width_m: 0.12                # 정차 LIMO 폭 0.22 (라바콘·표지판으로는 안 켜지게)
+    m7_max_width_m: 0.45                # 이보다 넓은 뎁스 장애물은 버림 (방지턱에서 차가 기울면 바닥이 폭 2 m 장애물로 보여 M7 이 켜졌다)
+    m7_min_height_m: 0.10               # 정차 LIMO 높이 0.25 (방지턱에서 차가 기울 때 바닥이 장애물로 보이는 것 거르기)
+    m7_confirm_frames: 3
+    m7_lane_width_m: 0.52               # 차로 중심 간격
+    m7_lanes: 3
+    m7_lane_margin_m: 0.05
+    m7_merge_m: 0.3                     # 같은 장애물로 볼 관측 중심 거리
+    m7_obstacle_len_m: 0.33             # 뎁스는 앞면만 → 장애물 길이 가정 (LIMO 0.322)
+    m7_oblique_deg: 25.0                # 이보다 비스듬히 (또는 범퍼 15 cm 안) 본 관측은 앞에서 본 관측이 3 개 넘게 있으면 상자에 안 넣음 (가정 길이가 엉뚱한 쪽으로 붙어 차 뒤까지 늘어남)
+    m7_block_m: 1.2                     # 내 차로 앞이 이 거리 안에서 막히면 갈 차로를 정함 (실제로 꺾는 때는 쓸기 검사가 정함)
+    m7_enter_window_m: 0.30             # 옆 차로 후보 = 막은 장애물 [앞면 − 이만큼, 뒷면 + 0.15 m] 가 그 차로에서 비어 있음 (차 길이쯤. 0.45 면 줄 끝 ~ 분리대 표지판 0.56 m 배치에서 갈 차로가 없어 갇힘)
+    m7_max_yaw_rate: 0.25               # [rad/s] 코너에서 도는 중이면 켜지 않음
+    m7_speed: 0.15
+    m7_change_speed: 0.08               # 대각으로 가는 동안
+    m7_kv: 1.0                          # 속도 = kv × (쓸기 검사로 갈 수 있는 거리 − stop_gap)
+    m7_stop_gap_m: 0.07
+    m7_margin_m: 0.03                   # 쓸기 검사: 차 사각형을 사방으로 키움 (기억 상자 오차). 이미 이 안에 든 상자는 0 으로
+    m7_rot_margin_m: 0.015              # 제자리 회전 검사 여유
+    m7_check_m: 1.0
+    m7_go_free_m: 0.15                  # 이만큼 이상 갈 수 있는 방향만 후보 (없으면 제자리 회전 후보 → 막힘)
+    m7_heading_step_deg: 10.0           # 차로 바꿀 때 방향 후보 0~60° 간격
+    m7_lookahead_m: 0.30
+    m7_k_heading: 1.8                   # 3.0 이면 시뮬 구동 지연 때문에 ±30° 로 흔들림
+    m7_kd_heading: 0.3                  # 지금 회전 속도 (IMU 자이로) 로 감쇠
+    m7_max_w: 1.5
+    m7_pp_heading_deg: 45.0             # 가장 바라는 방향 (pure pursuit) 상한
+    m7_max_heading_deg: 60.0            # 방향 후보 상한
+    m7_turn_first_deg: 25.0             # 고른 방향과 25° 넘게 다르면 제자리에서 먼저 돎
+    m7_lane_done_m: 0.10                # 목표 차로 중심과 이만큼 안이면 변경 끝 (여유)
+    m7_clear_m: 1.0
+    m7_prefer: "left"                   # 옆 차로 둘이 같으면 이쪽 — M2 갈림길 표지판을 못 봤을 때만
+    m7_max_m: 6.0
+    m7_stuck_check_s: 1.0               # 명령은 움직이라는데 (v > 0.03 또는 |w| > 0.3) 1 s 동안
+    m7_stuck_move_m: 0.01               #   1 cm 도
+    m7_stuck_rot_deg: 2.0               #   2° 도 못 움직이면 (밀고 있음) → 바로 후진
+    m7_blocked_s: 1.0                   # 갈 방향이 없으면 1 s 뒤 차로 다시 고르기, 2 s 뒤 후진
+    m7_back_m: 0.15                     # 후진 거리 (오도메트리)
+    m7_back_speed: 0.06
+    m7_back_timeout_s: 4.0
+    m7_back_lidar_m: 0.05               # 라이다로 본 뒤 빈 거리가 이보다 짧으면 후진 멈춤
+    m7_retry_radius_m: 0.20             # 이 안에서 다시 막히면 같은 자리 재시도
+    m7_retry_max: 3                     # 넘으면 멈추고 에러 로그
+    m7_align_deg: 3.0                   # 들어가자마자 IMU 방향으로 제자리 정렬
+    m7_align_timeout_s: 3.0
+    m7_pass_margin_m: 0.30              # 장애물 기억은 시간이 아니라, 뒷면이 차 뒤끝보다 이만큼 뒤로 지나간 뒤에 지움 (1 m 밖 30 s 안 보인 것은 지움)
+    m7_axis_snap_deg: 90.0               # 차로 방향을 90° 단위로 맞춤 (이 트랙 직선은 출발 방향과 평행·직각). 0 = 끔
+    m7_axis_frames: 20
+    m7_obstacle_width_m: 0.22           # 옆 장애물은 먼 옆면이 덜 보여 중심이 차 쪽으로 2–4.5 cm 잡힘 → 가까운 옆면 + 이 폭 (0 = 끔)
+    m7_side_min_m: 0.10                 # 장애물 가운데가 차 옆으로 이보다 멀 때만
+    m7_line_fix: true                   # 맨 왼쪽·오른쪽 차로에서 노란 바깥선으로 잰 차로 가운데로 격자 중심 보정 (LIMO 격자는 그대로 + 보정)
+    m7_line_fix_heading_deg: 15.0       # 차·선 방향이 차로 방향과 이 안일 때만 (차로 바꾸는 45° 대각 주행 중에는 안 씀). rosbag 5 판: 잰 가운데 오차 중앙 +0.3–0.8 cm
+    m7_line_fix_ahead_m: 0.60           # center_offset_m 을 재는 곳 (base_link 앞)
+    m7_line_fix_frames: 8               # 이만큼 모이면 중앙값 × gain 만큼 격자를 옮김
+    m7_line_fix_gain: 0.5
+    m7_line_fix_gate_m: 0.20            # 격자 중심과 이보다 다르면 버림
+    m7_line_fix_max_m: 0.15             # 보정 합 상한
+    # M2 갈림길 (M7 안에서): 표지판 결과로 3차선 끝 차로를 고른다 (A = 맨 왼쪽 → 왼쪽 길, B = 맨 오른쪽 → 오른쪽 길)
+    m2_label_a: "turn_a"                # YOLO 클래스 이름
+    m2_label_b: "turn_b"
+    m2_min_conf: 0.5
+    m2_min_box_px: 12                   # 갈림길 보조 박스는 판면만 (시뮬 4 m 앞 14 px). YOLO 박스는 지주까지라 더 크다
+    m2_confirm_frames: 3                # 같은 결과 이만큼 연속이면 채택. 다른 결과가 다시 확인되면 바꾼다 (표지판은 달리는 중에 바뀐다)
+    m2_lock_box_px: 45                  # 이 크기 이상으로 같은 결과를 확인하면 잠금 (분기점 가까이 — 보조 박스 45 px ≈ 표지판 1.2 m 앞). YOLO 박스는 지주까지라 더 일찍 잠김
+    # M8 라바콘 (Follow-the-Gap, 라이다 /perception/cones — lidar_processor). M2 를 지난 뒤에만 켜짐
+    cones_topic: "/perception/cones"
+    m8_require_m2: true                 # 순서 힌트 (시험에서 라바콘 앞 출발이면 false)
+    m8_trigger_m: 1.5                   # 앞 이 거리 안
+    m8_trigger_count: 4                 #   양쪽에 라바콘 이만큼 이상이
+    m8_confirm_frames: 3                #   이만큼 연속 (라이다 8 Hz)
+    m8_cone_half_m: 0.055               # 쓸기 검사 상자 = 바닥판 0.11 m (바퀴가 바닥판에 안 닿게)
+    m8_body_r_m: 0.022                  # 라이다 높이 몸통 반지름 (시뮬 0.111 m 높이에서 지름 4.3 cm) — 틈 폭 = 중심 거리 − 몸통 지름
+    m8_gap_min_m: 0.32                  # 틈 후보: 차 폭 0.22 + 0.10
+    m8_aim_m: 0.25                      # 틈 가운데점을 이은 길 위 앞 목표점 (오프라인 7 배치에서 여유 최대)
+    m8_max_heading_deg: 45.0
+    m8_look_m: 1.2
+    m8_check_m: 0.8
+    m8_margin_m: 0.01                   # 쓸기 검사 여유
+    m8_slow_clear_m: 0.05               # 0.15 m 쓸어 볼 때 이 여유로 닿으면 느리게
+    m8_slow_check_m: 0.15
+    m8_speed: 0.15
+    m8_slow_speed: 0.10
+    m8_stop_gap_m: 0.03
+    m8_rot_limit_deg: 15.0              # 통로 안 제자리 회전 한도
+    m8_stuck_check_s: 1.0               # 움직이라는데 1 s 못 움직이면
+    m8_back_m: 0.10                     #   이만큼 후진 후 다시 계산
+    m8_retry_max: 3                     #   같은 자리 이만큼 넘으면 조금이라도 앞으로 가는 쪽으로 계속
+    m8_end_clear_m: 1.0                 # 끝: 앞 이 거리 안에 라바콘이 없고
+    m8_end_pass_m: 0.4                  #   옆·뒤 라바콘도 이만큼 지남
+    m8_exit_deg: 6.0                    # 끝에서 통로 출구선 (마지막 쌍 가운데, 처음 → 마지막 쌍 방향) 과 방향 오차 이 안,
+    m8_exit_lat_m: 0.04                 #   옆 오차 이 안으로 맞춘 뒤 차선 추종 (S 끝에서 틀어진·치우친 채 커브로 들어가 바깥 선을 따라간 적 있음)
+    m8_exit_look_m: 0.3
+    m8_exit_s: 3.0
+    m8_exit_slow_s: 1.5                 # 차선 추종으로 넘긴 뒤 이 동안
+    m8_exit_speed: 0.15                 #   이 속도 상한
+    m3_max_box_px: 200                  # 보행자 표지판 박스 상한 (라바콘 구간에서 화면 가득 오검출 480 px)
+    # M1 신호등: /perception/traffic_light (traffic_light 노드 — 세 칸 밝기로 색, 모니터 거르기). 정지선은 M3 와 같은 코드 (m3_* 보정값 공통)
+    light_topic: "/perception/traffic_light"
+    parking_start_topic: "/parking/start"   # M1 끝 (정지선 지남) 에 std_msgs/Empty
+    m1_require_m8: true                 # 순서 힌트: M8 을 지난 뒤에만
+    m1_confirm_frames: 5                # 색 (크기 확인 없이도) 이만큼 연속 → M1_APPROACH (정지선 찾기)
+    m1_green_frames: 8                  # 크기까지 확인한 초록 이만큼 연속 → 발진·통과. 빨강·노랑·안 보임·애매는 모두 정지 (노랑도 멈춤)
+    m1_approach_speed: 0.15
+    m1_search_m: 3.0                    # 신호등을 본 뒤 이 거리 안에 정지선이 안 보이면 포기 (경고)
+    m1_exit_m: 0.3                      # 정지선을 이만큼 지나면 끝 → LANE + /parking/start
+    m1_go_abort_m: 0.0                  # 초록 보고 통과하기로 한 뒤 노랑·빨강이 되면, 정지선까지 이만큼 넘게 남았을 때 다시 섬 (0 = 앞바퀴가 선에 닿기 전이면 언제나 — 노랑도 정지)
+    m1_stop_frames: 3                   # 통과 중 크기 확인한 노랑·빨강 이만큼 (초록 없이) → 다시 정지선에 섬
+    m1_go_speed: 0.15                   # 초록 보고 통과할 때도 정지선 지나 m1_exit_m 까지 서행 (그 사이 노랑이 되면 정지선에 서도록)
+    m1_log_s: 2.0                       # 정지 유지 중 판단 로그 주기

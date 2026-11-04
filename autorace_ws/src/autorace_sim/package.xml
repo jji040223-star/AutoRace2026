@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>autorace_sim</name>
+  <version>0.1.0</version>
+  <description>AutoRace 2026 트랙 + LIMO Isaac Sim 5.1 시뮬레이터 (run_sim.py) 와 보조 ROS2 노드</description>
+  <maintainer email="dkkim528@kookmin.ac.kr">kb4</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
+  <exec_depend>std_srvs</exec_depend>
+  <exec_depend>autorace_track</exec_depend>
+  <exec_depend>autorace_msgs</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

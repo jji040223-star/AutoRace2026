@@ -1,0 +1,19 @@
+# 라이다 라바콘 (autorace_perception/lidar_processor.py, M8). 시뮬: 라이다 높이 0.111 m, 라바콘 단면 지름 약 4.3 cm
+lidar_processor:
+  ros__parameters:
+    scan_topic: "/scan"
+    odom_topic: "/odom"
+    cones_topic: "/perception/cones"          # geometry_msgs/PoseArray, odom 좌표
+    marker_topic: "/perception/cone_markers"
+    laser_x: 0.103
+    fov_deg: 90.0                       # 앞 ±
+    range_min: 0.12                     # X2L 최소 거리
+    range_max: 1.5
+    cluster_gap_m: 0.06
+    min_points: 1                       # 1.5 m 앞이면 1~2 점
+    max_size_m: 0.12                    # 이보다 큰 묶음은 버림 (정차 LIMO 0.22, 벽)
+    cone_radius_m: 0.022
+    merge_m: 0.08
+    min_hits: 2
+    pass_margin_m: 0.4                  # 진행 방향으로 이만큼 지나간 뒤에 지움 (시간으로 안 지움)
+    max_keep_m: 3.0

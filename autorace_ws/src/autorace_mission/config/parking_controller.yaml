@@ -1,0 +1,43 @@
+# M4 T자 주차·탈출 (autorace_mission/parking_controller.py). 시뮬 칸: 안쪽 500 × 600 mm, 통로 (주차선 → 2차로 바깥 경계) 0.52 m
+parking_controller:
+  ros__parameters:
+    standalone: false                   # true = /parking/start 없이 바로 시작 (주차 구역 앞에서). parking.launch 가 true 로
+    bay_side: "right"                   # 주차 칸 줄이 진행 방향 어느 쪽 (시뮬: 2차로 +x 로 가면 오른쪽)
+    bay_w: 0.50                         # 칸 안쪽 폭 (진행 방향) [m]
+    bay_d: 0.60                         # 칸 안쪽 깊이 [m]
+    approach_speed: 0.10
+    wait_detect_m: 0.9                  # 통합 모드: 차선 추종 중 앞옆 이 거리 안에 주차 LIMO 가 보이면 접근 시작
+    row_keep_k: 1.5                     # 주차 LIMO 줄과 옆 거리 유지 (방향 보정 [rad/m], ±row_keep_max_deg)
+    row_keep_max_deg: 6.0
+    side_probe_dx: 0.04                 # 차 중심 옆 라이다 띠 (진행 방향 ±)
+    side_near_m: 0.75                   # 옆 이 안 = 가까움 (LIMO)
+    side_far_m: 0.95                    # 이 밖 = 멂 (빈 칸)
+    gap_min_m: 0.45                     # 빈 칸 = LIMO 옆면 사이 이 폭 이상 (차 폭 0.22 + 여유)
+    gap_max_m: 1.30
+    limo_half_l: 0.161                  # 이웃 LIMO 끝면 → 칸 깊이 가운데
+    align_tol_m: 0.008
+    align_speed: 0.06
+    rot_margin_m: 0.03                  # 제자리 회전 반경 (0.194 m) 여유 — 쓸기 검사
+    rot_tol_deg: 1.5                    # IMU 90° 회전 허용 오차 (규정 ±2°)
+    rot_max_w: 0.8
+    rot_min_w: 0.2                      # 스키드는 작은 각속도로는 잘 안 돈다 (0.15 면 1 s 에 2° 도 못 돎, 0.3 이면 지연으로 ±3° 진동)
+    rot_slow_deg: 25.0                  # 오차 비례 감속 (이 오차에서 rot_max_w)
+    rot_lag_s: 0.45                     # 명령 → 실제 회전 지연: 이 시간 동안 지금 각속도로 더 돌 것을 빼고 멈춤 (시뮬 실측, 실차는 잴 것)
+    measure_s: 0.5
+    measure_tol_m: 0.05                 # 돈 뒤 다시 잰 옆 오차가 이보다 크면 돌아 나와 다시 정렬
+    enter_speed: 0.09                   # 진입 0.08~0.10
+    enter_min_speed: 0.03
+    enter_kp: 0.5
+    enter_k_lat: 2.0                    # 양옆 거리 같게 (P)
+    enter_k_head: 1.5
+    enter_max_w: 0.25                   # 칸 안 각속도 한도
+    cam_x: 0.084
+    line_match_m: 0.10
+    depth_tol_m: 0.02
+    corner_min_m: 0.03                  # 모서리 → 선 여유가 이보다 작으면 앞뒤 보정
+    max_fix: 2
+    hold_s: 2.5                         # 주차 뒤 정지
+    exit_speed: 0.09
+    stuck_s: 1.0                        # 움직이라는데 이만큼 못 움직이면 정렬부터 다시
+    max_retry: 3
+    laser_x: 0.103

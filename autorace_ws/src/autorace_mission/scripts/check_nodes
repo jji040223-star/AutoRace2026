@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autorace_mission.check_nodes import main
+
+main()

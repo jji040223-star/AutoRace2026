@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autorace_lane.lane_follower import main
+
+main()

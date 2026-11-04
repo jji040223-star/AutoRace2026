@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autorace_sim.reset_sim import main
+
+main()

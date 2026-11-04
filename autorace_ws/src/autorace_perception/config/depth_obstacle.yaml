@@ -1,0 +1,19 @@
+# 뎁스 장애물 (autorace_perception/depth_obstacle.py). 카메라 위치는 sensor_mounts camera_link 와 같게 (실차는 실측).
+depth_obstacle:
+  ros__parameters:
+    depth_topic: "/camera/depth/image_raw"   # 16UC1 mm
+    info_topic: "/camera/depth/camera_info"
+    obstacles_topic: "/perception/obstacles"
+    marker_topic: "/perception/obstacle_markers"   # RViz: MarkerArray 로 주황 상자
+    base_frame: "base_link"
+    cam_x: 0.084
+    cam_y: 0.0
+    cam_height: 0.175
+    cam_pitch_deg: 0.0
+    step: 4
+    min_height: 0.04                    # 방지턱 0.02 m 는 거른다
+    max_height: 0.6
+    max_range: 2.5
+    max_lateral: 1.0
+    cell: 0.04
+    min_points: 8

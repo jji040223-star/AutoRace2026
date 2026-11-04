@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>autorace_mission</name>
+  <version>0.1.0</version>
+  <description>미션 매니저 FSM (v3 노드 1): 검출·오도메트리 → /mission/state, /mission/lane_cmd</description>
+  <maintainer email="dkkim528@kookmin.ac.kr">kb4</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>std_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>autorace_msgs</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>autorace_perception</exec_depend>
+  <exec_depend>autorace_lane</exec_depend>
+  <exec_depend>autorace_sim</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

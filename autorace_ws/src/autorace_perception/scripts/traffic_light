@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autorace_perception.traffic_light import main
+
+main()

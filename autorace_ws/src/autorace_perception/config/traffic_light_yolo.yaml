@@ -1,0 +1,14 @@
+# 신호등 YOLO (M1) — yolo_detector 를 신호등 모델로 하나 더 띄운 것 (drive.launch 의 traffic_light_yolo).
+# 모델: models/traffic_light_yolov8n.pt (YOLOv8n 640, 클래스 red_light·yellow_light·green_light — 시뮬 영상 300 장으로 학습,
+# autorace_sim light_dataset 으로 수집). 실차 영상으로 다시 학습할 것.
+traffic_light_yolo:
+  ros__parameters:
+    model_path: ""                      # drive.launch 가 채움 (이 패키지 models/traffic_light_yolov8n.pt)
+    image_topic: "/camera/color/image_raw"
+    detections_topic: "/perception/traffic_light_detections"
+    debug_topic: "/perception/traffic_light_yolo_debug"
+    debug_hz: 0.0
+    conf: 0.4
+    imgsz: 640
+    max_hz: 10.0
+    branch_assist: false

@@ -1,0 +1,76 @@
+#!/usr/bin/env python3
+"""저장한 영상으로 슬라이딩 윈도우 검출기를 돌려 본다 (ROS 없이). 실차 HSV·BEV 맞출 때.
+
+  ros2 run autorace_lane lane_replay <영상 폴더 | 동영상 파일> [--params lane_follower.yaml] [--out DIR] [--every N]
+
+params 를 안 주면 설치된 config/lane_follower.yaml (노드와 같은 파일) 을 읽는다. 결과: 프레임마다 offset·SW 락 한 줄,
+--out 이면 디버그 그림 (왼쪽 BEV + 상자·피팅, 오른쪽 마스크) 저장.
+"""
+import argparse
+from pathlib import Path
+
+import cv2
+import yaml
+
+from ament_index_python.packages import get_package_share_directory
+
+from autorace_lane.lane_follower import DETECTOR_PARAMS, bev_src_from_camera
+from autorace_lane.sliding_window import SlidingWindowLaneDetector
+
+DEFAULT_PARAMS = Path(get_package_share_directory('autorace_lane')) / 'config' / 'lane_follower.yaml'
+
+
+def frames(src):
+    p = Path(src)
+    if p.is_dir():
+        for f in sorted(p.iterdir()):
+            if f.suffix.lower() in ('.png', '.jpg', '.jpeg', '.bmp'):
+                yield f.name, cv2.imread(str(f))
+        return
+    cap = cv2.VideoCapture(str(p))
+    i = 0
+    while True:
+        ok, img = cap.read()
+        if not ok:
+            return
+        yield f'{p.stem}_{i:05d}', img
+        i += 1
+
+
+def main():
+    ap = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    ap.add_argument('src')
+    ap.add_argument('--params', type=Path, default=DEFAULT_PARAMS)
+    ap.add_argument('--out', type=Path)
+    ap.add_argument('--every', type=int, default=1, help='N 프레임마다 하나')
+    a = ap.parse_args()
+    P = dict(DETECTOR_PARAMS)
+    doc = yaml.safe_load(a.params.read_text())
+    P.update(next(iter(doc.values()))['ros__parameters'])
+    cfg = {k: P[k] for k in DETECTOR_PARAMS}
+    for k in ('white_hsv_lo', 'white_hsv_hi', 'yellow_hsv_lo', 'yellow_hsv_hi'):
+        cfg[k] = tuple(int(v) for v in cfg[k])
+    if a.out:
+        a.out.mkdir(parents=True, exist_ok=True)
+    det = None
+    for i, (name, img) in enumerate(frames(a.src)):
+        if img is None or i % a.every:
+            continue
+        pw = int(P['process_width'])
+        img = cv2.resize(img, (pw, int(round(img.shape[0] * pw / img.shape[1]))), interpolation=cv2.INTER_AREA)
+        if det is None:
+            src = [float(v) for v in P['birdeye_src_ratio']]
+            cfg['birdeye_src_ratio'] = src if len(src) == 8 else bev_src_from_camera(
+                img.shape[1], img.shape[0], cfg['roi_top_ratio'], P['camera_hfov_deg'], P['camera_height'],
+                P['camera_pitch_deg'], P['bev_near_m'], P['bev_far_m'], P['bev_half_width_m'])
+            print('birdeye_src_ratio =', [round(v, 4) for v in cfg['birdeye_src_ratio']])
+            det = SlidingWindowLaneDetector(**cfg)
+        r = det.process(img, draw_debug=a.out is not None)
+        print(f'{name}: found={int(r.found)} offset={r.offset:+.3f} curv={r.curvature:+.3f} nl={r.num_lanes} '
+              f'sw={int(r.sw_locked)} {r.sw_fail or ""} {r.sw_fitrej or ""} W={r.lane_width_px:.0f}')
+        if a.out:
+            cv2.imwrite(str(a.out / f'{Path(name).stem}_dbg.png'), r.debug)
+
+
+if __name__ == '__main__':
+    main()

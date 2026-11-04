@@ -1,0 +1,42 @@
+# 트랙 USD 빌드 파라미터 — tools/build_track_usd.py 가 읽는다.
+# 경로는 autorace_track 패키지 기준 상대경로. 색은 sRGB hex.
+# 기본 색은 참고 그림(data/source/2026Track_reference.png)에서 뽑은 값.
+
+input_json: data/generated/track_elements.json   # tools/dxf_classify.py 출력 (mm)
+output_usd: usd/autorace_track.usda
+
+mat:                      # 10 m × 6 m 트랙 매트 (윗면 z = 0)
+  color: "#36342e"
+  roughness: 0.85
+
+venue:                    # 매트 바깥 행사장 바닥. margin_m: 0 이면 만들지 않음
+  margin_m: 3.0
+  color: "#8a8780"
+  roughness: 0.9
+  z_m: -0.003             # 매트보다 살짝 아래 (겹침 깜빡임 방지)
+
+paint:
+  height_m: 0.001         # 노면표시 메쉬를 매트 위로 띄우는 높이
+  roughness: 0.55
+  colors:
+    white: "#dfdaca"
+    yellow: "#e5aa43"
+    black: "#111111"
+  class_color:            # 분류(dxf_classify.py) → 위 색 이름
+    road_edge: yellow
+    zigzag: yellow
+    lane_dash: white
+    stop_line: white
+    crosswalk: white
+    slow_diamond: white
+    slow_text: white
+    branch_letter: white
+    parking_line: white
+    start_white: white
+    start_black: black
+
+physics:                  # 바닥 물리 재질 (매트 + 행사장 바닥 공통)
+  static_friction: 0.8
+  dynamic_friction: 0.7
+  restitution: 0.0
+  friction_combine_mode: average   # PhysX: average | min | multiply | max
