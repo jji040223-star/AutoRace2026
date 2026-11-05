@@ -1,0 +1,28 @@
+# 실차 LIMO Pro (wego) 보정값 — 시뮬과 같이 쓰는 기본 설정 위에 덮어쓴다 (drive.launch params:=이 파일).
+#   ros2 launch autorace_mission drive.launch.py use_sim_time:=false reset_sim:=false params:=$(ros2 pkg prefix autorace_bringup)/share/autorace_bringup/config/real_limo.yaml
+# 센서는 wego teleop_launch.py (카메라 각도 degree 0 — 바꾸면 다시 보정).
+# 11-05 연습 트랙: 직선 차로 가운데, lane_calib (--hfov 66.4) + depth_calib. 두 높이 0.190 / 0.192 m → 차로 폭 0.525 m (도면 0.52).
+# 숙인 각도가 둘이 다른 것 (8.46 / 5.32°) 은 정상: 실제 영상 중심이 cy 211 px (가운데 240 아님) — lane_follower 는 가운데를 가정하는
+# 모델이라 lane_calib 값 (같은 가정으로 잰 것), 뎁스 쪽은 camera_info 를 쓰므로 실제 각도 (depth_calib).
+lane_follower:
+  ros__parameters:
+    camera_hfov_deg: 66.4               # camera_info fx 488.2 → 2·atan(320/488.2)
+    camera_height: 0.190
+    camera_pitch_deg: 8.46
+    camera_yaw_deg: 0.26
+    yellow_hsv_lo: [10, 57, 133]        # 연습 트랙 노란 선 H 14–21, S 82–124, V 191–255 (매트 0 %)
+    yellow_hsv_hi: [25, 255, 255]
+depth_obstacle:
+  ros__parameters:
+    cam_height: 0.192
+    cam_pitch_deg: 5.32
+    cam_yaw_deg: 0.26
+lidar_processor:
+  ros__parameters:
+    tall_cam_h: 0.192
+    tall_cam_pitch_deg: 5.32
+    tall_cam_vfov_deg: 46.8             # 화면 위 끝 = 2·atan(cy 211.3 / fy 488.2) (영상 중심이 위로 치우쳐 있어 실제 세로 화각 52.4° 대신)
+mission_manager:
+  ros__parameters:
+    m7_cam_hfov_deg: 66.5
+    m7_cam_yaw_deg: 0.26

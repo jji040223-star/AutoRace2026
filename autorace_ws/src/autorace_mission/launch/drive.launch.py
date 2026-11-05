@@ -42,17 +42,19 @@ def _actions(context):
     arg = lambda name: LaunchConfiguration(name).perform(context).lower() == 'true'   # noqa: E731
     sim = arg('use_sim_time')
     common = {'use_sim_time': sim}
+    ov = LaunchConfiguration('params').perform(context)
+    OV = [ov] if ov else []        # 실차 보정값 등 — 모든 노드 기본 설정 위에 덮어씀 (노드 이름별 섹션)
     yolo = Node(package='autorace_perception', executable='yolo_detector', name='yolo_detector', output='screen',
-                parameters=[share('autorace_perception', 'config', 'yolo_detector.yaml'), common])
+                parameters=[share('autorace_perception', 'config', 'yolo_detector.yaml')] + OV + [common])
     depth = Node(package='autorace_perception', executable='depth_obstacle', name='depth_obstacle', output='screen',
-                 parameters=[share('autorace_perception', 'config', 'depth_obstacle.yaml'), common])
+                 parameters=[share('autorace_perception', 'config', 'depth_obstacle.yaml')] + OV + [common])
     lidar = Node(package='autorace_perception', executable='lidar_processor', name='lidar_processor', output='screen',
-                 parameters=[share('autorace_perception', 'config', 'lidar_processor.yaml'), common])
+                 parameters=[share('autorace_perception', 'config', 'lidar_processor.yaml')] + OV + [common])
     light = Node(package='autorace_perception', executable='traffic_light', name='traffic_light', output='screen',
-                 parameters=[share('autorace_perception', 'config', 'traffic_light.yaml'), common])
+                 parameters=[share('autorace_perception', 'config', 'traffic_light.yaml')] + OV + [common])
     src = LaunchConfiguration('light_source').perform(context).lower()
     light_yolo = Node(package='autorace_perception', executable='yolo_detector', name='traffic_light_yolo', output='screen',
-                      parameters=[share('autorace_perception', 'config', 'traffic_light_yolo.yaml'),
+                      parameters=[share('autorace_perception', 'config', 'traffic_light_yolo.yaml')] + OV + [
                                   dict(common, model_path=share('autorace_perception', 'models', 'traffic_light_yolov8n.pt'))])
     fake = Node(package='autorace_sim', executable='fake_traffic_light', name='fake_traffic_light', output='screen',
                 parameters=[dict(common, decoy=arg('decoy'),
@@ -62,13 +64,13 @@ def _actions(context):
                                  start_yaw_deg=float(LaunchConfiguration('start_yaw_deg').perform(context)))])
     extra = LaunchConfiguration('mission_params').perform(context)
     mission = Node(package='autorace_mission', executable='mission_manager', name='mission_manager', output='screen',
-                   parameters=[share('autorace_mission', 'config', 'mission_manager.yaml')] + ([extra] if extra else []) + [common])
+                   parameters=[share('autorace_mission', 'config', 'mission_manager.yaml')] + OV + ([extra] if extra else []) + [common])
     park = Node(package='autorace_mission', executable='parking_controller', name='parking_controller', output='screen',
-                parameters=[share('autorace_mission', 'config', 'parking_controller.yaml'), common])
+                parameters=[share('autorace_mission', 'config', 'parking_controller.yaml')] + OV + [common])
     mux = Node(package='autorace_mission', executable='cmd_vel_mux', name='cmd_vel_mux', output='screen',
-               parameters=[share('autorace_mission', 'config', 'cmd_vel_mux.yaml'), common])
+               parameters=[share('autorace_mission', 'config', 'cmd_vel_mux.yaml')] + OV + [common])
     lane = Node(package='autorace_lane', executable='lane_follower', name='lane_follower', output='screen',
-                parameters=[share('autorace_lane', 'config', 'lane_follower.yaml'),
+                parameters=[share('autorace_lane', 'config', 'lane_follower.yaml')] + OV + [
                             dict(common, enable=arg('enable'), cmd_vel_topic='/lane/cmd_vel')])
     reset = Node(package='autorace_sim', executable='reset_sim', name='reset_sim', output='screen')
     check = Node(package='autorace_mission', executable='check_nodes', name='check_nodes', output='screen', arguments=NODES)
@@ -128,6 +130,7 @@ def generate_launch_description():
         DeclareLaunchArgument('start_x', default_value='0.74', description='시뮬 출발 자세 (params_sim robot.start_*) — 가짜 검출용'),
         DeclareLaunchArgument('start_y', default_value='5.58'),
         DeclareLaunchArgument('start_yaw_deg', default_value='0.0'),
+        DeclareLaunchArgument('params', default_value='', description='모든 노드에 덮어쓸 yaml (실차: autorace_bringup/config/real_limo.yaml)'),
         DeclareLaunchArgument('mission_params', default_value='', description='mission_manager 설정을 덮어쓸 yaml (시험용)'),
         DeclareLaunchArgument('perception', default_value='yolo',
                               description='yolo (YOLO 노드) | sim2d (2D 시뮬이 표지판·신호등 박스를 직접 냄, YOLO 없이)'),
