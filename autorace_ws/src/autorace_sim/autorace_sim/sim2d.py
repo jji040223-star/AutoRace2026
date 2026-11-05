@@ -112,6 +112,7 @@ class Sim2D(Node):
         p('height', 480)
         p('hfov_deg', 71.0)
         p('cam_x', 0.084)
+        p('wheel_r', 0.045)                # 바퀴 반지름 — 정지선 앞 정지 판정 (바퀴 맨 앞 = 앞바퀴 축 + 반지름)
         p('cam_y', 0.0)
         p('cam_height', 0.175)
         p('cam_pitch_deg', 0.0)            # 아래로 +
@@ -167,6 +168,13 @@ class Sim2D(Node):
         self.cone_layouts = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(self.cone_layouts)
         self.build_raster()
+        # 정지선: stop_line + 횡단보도 앞뒤 가로줄 (crosswalk 중 차로를 가로지르는 얇고 긴 것 — M3 는 이 줄 앞에 선다)
+        def crossing_bar(e):
+            b = e['bbox']
+            w, h = (b[2] - b[0]) / 1000.0, (b[3] - b[1]) / 1000.0
+            return min(w, h) <= 0.06 and max(w, h) >= 0.3
+        self.stop_lines = [np.asarray(e['exterior'], np.float64) / 1000.0 for e in self.track['elements']
+                           if e['class'] == 'stop_line' or (e['class'] == 'crosswalk' and crossing_bar(e))]
         self.build_camera()
 
         self.sim_t = 0.0
@@ -555,7 +563,9 @@ class Sim2D(Node):
     # ------------------------------------------------------------------ 기록
     def stats_reset(self):
         self.stats = {'min_line_m': float('inf'), 'touch_s': 0.0, 'dist_m': 0.0, 'since': getattr(self, 'sim_t', 0.0),
-                      'cells': {}}           # 1 m 칸 'x,y' → [그 칸에서 바퀴~노란 선 최소 거리, 선 밟은 시간]
+                      'cells': {},           # 1 m 칸 'x,y' → [그 칸에서 바퀴~노란 선 최소 거리, 선 밟은 시간]
+                      'stops': []}           # 정지선 앞에서 멈출 때마다 바퀴 맨 앞 → 정지선 가까운 끝 [m] (음수 = 밟음)
+        self._still_s, self._stop_logged = 0.0, False
         self.prev_xy = None
 
     def track_stats(self, dt):
@@ -580,9 +590,35 @@ class Sim2D(Node):
                 self.get_logger().warn(f'[sim2d] 바퀴가 노란 선을 밟음 — 차 ({self.x:.2f}, {self.y:.2f}) yaw {math.degrees(self.yaw):.0f}°')
             else:
                 self.get_logger().info(f'[sim2d] 노란 선에서 벗어남 — 차 ({self.x:.2f}, {self.y:.2f})')
+        if abs(self.v) < 0.003 and abs(self.w) < 0.01:
+            self._still_s += dt
+        else:
+            self._still_s, self._stop_logged = 0.0, False
+        if self._still_s > 0.5 and not self._stop_logged:
+            self._stop_logged = True
+            gap = self.stop_line_gap()
+            if gap is not None:
+                self.stats['stops'].append(round(gap, 4))
+                msg = f'[sim2d] 정지선 앞 정지: 바퀴 맨 앞 → 정지선 {gap * 100:+.1f} cm — 차 ({self.x:.2f}, {self.y:.2f})'
+                (self.get_logger().warn if gap < 0 else self.get_logger().info)(msg + (' — 정지선 밟음' if gap < 0 else ''))
         if self.prev_xy is not None:
             self.stats['dist_m'] += math.dist(self.prev_xy, (self.x, self.y))
         self.prev_xy = (self.x, self.y)
+
+    def stop_line_gap(self):
+        """차 앞 가까이 차로를 가로지르는 정지선이 있으면 바퀴 맨 앞 → 그 선 가까운 끝 [m] (진행 방향). 없으면 None."""
+        c, s = math.cos(self.yaw), math.sin(self.yaw)
+        ax, ay = self.x + WHEELS[0][0] * c, self.y + WHEELS[0][0] * s
+        best = None
+        for P in self.stop_lines:
+            along = (P[:, 0] - ax) * c + (P[:, 1] - ay) * s
+            lat = -(P[:, 0] - ax) * s + (P[:, 1] - ay) * c
+            if lat.min() > 0.1 or lat.max() < -0.1 or along.max() - along.min() > 0.15:
+                continue                    # 차 앞을 가로지르지 않음 (옆 차로·진행 방향으로 긴 선)
+            gap = float(along.min()) - self.g('wheel_r')
+            if -0.25 < gap < 0.5 and (best is None or abs(gap) < abs(best)):
+                best = gap
+        return best
 
     def publish_status(self, _st):
         self.pub_pose.publish(Pose2D(x=self.x, y=self.y, theta=self.yaw))
@@ -591,6 +627,7 @@ class Sim2D(Node):
                  min_line_m=round(self.stats['min_line_m'], 3), touch_s=round(self.stats['touch_s'], 2),
                  dist_m=round(self.stats['dist_m'], 2), collisions=dict(self.hits), knocked=sorted(self.knocked),
                  cells={k: [round(v[0], 3), round(v[1], 2)] for k, v in self.stats['cells'].items()},
+                 stops=self.stats['stops'],
                  light=self.light_color(), branch=self.branch,
                  odom_err_m=round(self.odom_error(), 3))
         self.pub_status.publish(String(data=json.dumps(d)))

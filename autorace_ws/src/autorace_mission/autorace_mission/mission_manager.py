@@ -128,7 +128,9 @@ class MissionManager(Node):
         p('m3_min_speed', 0.04)
         p('m3_kp', 0.5)                    # 속도 [m/s] = kp × 남은 거리 [m]
         p('m3_cam_to_front_axle_m', 0.016) # 카메라 → 앞바퀴 축 (앞이 +). sim: 카메라 x 0.084, 앞축 x 0.1
-        p('m3_stop_gap_m', 0.0)            # 앞바퀴 축을 정지선 가까운 끝에서 이만큼 앞에 세움 (판정 기준 확인 후 조정)
+        p('m3_wheel_front_m', 0.045)       # 앞바퀴 축 → 바퀴 맨 앞 (바퀴 반지름). 실차 실측
+        p('m3_line_margin_m', 0.025)       # 바퀴 맨 앞을 정지선 가까운 끝에서 이만큼 앞에 세움 — 정지선을 밟으면 안 됨
+        p('m3_stop_gap_m', 0.0)            # 정지 명령 뒤 미끄러지는 거리 보정 (이만큼 일찍 정지 명령)
         p('m3_line_match_m', 0.10)         # 잡은 정지선과 이만큼 넘게 다른 측정 = 다른 선 (횡단보도 앞·뒤 가로선 간격 0.54 m)
         p('m3_search_m', 2.0)
         p('m3_wait_s', 4.0)
@@ -489,7 +491,7 @@ class MissionManager(Node):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         if msg.stop_line_dist_m <= 0:
             return
-        remain = msg.stop_line_dist_m - g('m3_cam_to_front_axle_m') - g('m3_stop_gap_m')
+        remain = msg.stop_line_dist_m - g('m3_cam_to_front_axle_m') - self.stop_back()
         pos = self.pos_at(stamp_s(msg.header))
         first = st.get('line') is None
         if not first:
@@ -502,7 +504,7 @@ class MissionManager(Node):
         st['line'] = (pos, remain)
         if first:
             self.get_logger().info(f'[{tag}] 정지선 보임: 카메라에서 {msg.stop_line_dist_m:.3f} m (덮은 비율 {msg.stop_line_cov:.2f}), '
-                                   f'앞바퀴까지 {remain:.3f} m, {what} 뒤 {self.dist_from(st["start"]):.2f} m')
+                                   f'정지 목표까지 {remain:.3f} m, {what} 뒤 {self.dist_from(st["start"]):.2f} m')
 
     def on_imu(self, msg):
         t = stamp_s(msg.header)
@@ -1310,6 +1312,17 @@ class MissionManager(Node):
     def m3_remaining(self):
         return self.line_remaining(self._m3)
 
+    def stop_back(self):
+        """정지 목표 (앞바퀴 축) 가 정지선 가까운 끝보다 뒤에 있는 거리 = 바퀴 반지름 + 여유 + 미끄러짐 보정.
+        line_remaining 은 이 목표까지 남은 거리 (0 이하 → 정지 명령)."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        return g('m3_wheel_front_m') + g('m3_line_margin_m') + g('m3_stop_gap_m')
+
+    def wheel_gap(self, st):
+        """바퀴 맨 앞 → 정지선 가까운 끝 [m] (+ = 선 앞, 음수 = 밟음 또는 넘음), 오도메트리 추정."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        return self.line_remaining(st) + g('m3_line_margin_m') + g('m3_stop_gap_m')
+
     # ---------------------------------------------------------------- M1 신호등
     def on_light(self, msg):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
@@ -1365,15 +1378,15 @@ class MissionManager(Node):
                 self.set_state('M1_GO', f'초록 (크기 확인 {m["green_n"]} 번 연속) — 정지선 {remain * 100:+.1f} cm 앞에서 서지 않고 통과')
             elif remain <= 0.0:
                 cmd.stop = True
-                self.set_state('M1_STOP', f'앞바퀴 정지선 도달 (남은 거리 {remain * 100:+.1f} cm), 정지 — {self.m1_light_desc()}')
+                self.set_state('M1_STOP', f'정지 목표 도달 (남은 거리 {remain * 100:+.1f} cm), 정지 — {self.m1_light_desc()}')
             else:
                 cmd.max_speed = float(min(g('m1_approach_speed'), max(g('m3_min_speed'), g('m3_kp') * remain)))
         elif s == 'M1_STOP':
             cmd.stop = True
             if 'still_t' not in m and self._speed < g('m3_still_mps'):
                 m['still_t'] = now
-                gap = self.line_remaining(m) + g('m3_stop_gap_m')
-                self.get_logger().info(f'[M1] 완전 정지: 앞바퀴 축 → 정지선 가까운 끝 {gap * 100:+.1f} cm (+ = 선 앞, 규정 ±5 cm) — '
+                gap = self.wheel_gap(m)
+                self.get_logger().info(f'[M1] 완전 정지: 바퀴 맨 앞 → 정지선 {gap * 100:+.1f} cm (+ = 선 앞, 0 아래면 밟음, 오도메트리 추정) — '
                                        f'{self.m1_light_desc()}')
             if self.m1_green():
                 cmd.stop = False
@@ -1401,7 +1414,7 @@ class MissionManager(Node):
                 self.get_logger().info(f'[M1] 움직이기 시작: 첫 초록 판정 뒤 {now - m.get("green_t", now):.2f} s, 발진 명령 뒤 '
                                        f'{now - m["go_t"]:.2f} s')
             line = m.get('line')
-            past = (self.dist_from(line[0]) - line[1]) if line else 0.0
+            past = (self.dist_from(line[0]) - line[1] - self.stop_back()) if line else 0.0   # 앞바퀴 축이 정지선을 지난 거리
             if line is None or past >= g('m1_exit_m'):
                 self._m1_done = True
                 self.start_parking(f'정지선 {past:.2f} m 지남 → M1 끝')
@@ -1435,16 +1448,16 @@ class MissionManager(Node):
                 cmd.max_speed = float(g('m3_approach_speed'))
             elif remain <= 0.0:
                 cmd.stop = True
-                self.set_state('M3_STOP', f'앞바퀴 정지선 도달 (남은 거리 {remain * 100:+.1f} cm), 정지 명령, odom {self.fmt(self._pos)}')
+                self.set_state('M3_STOP', f'정지 목표 도달 (남은 거리 {remain * 100:+.1f} cm), 정지 명령, odom {self.fmt(self._pos)}')
             else:
                 cmd.max_speed = float(min(g('m3_approach_speed'), max(g('m3_min_speed'), g('m3_kp') * remain)))
         elif s == 'M3_STOP':
             cmd.stop = True
             if 'still_t' not in self._m3 and self._speed < g('m3_still_mps'):
                 self._m3['still_t'] = now
-                gap = self.m3_remaining() + g('m3_stop_gap_m')       # 남은 거리는 stop_gap 을 뺀 목표 기준 → 선 기준으로
-                self.get_logger().info(f'[M3] 완전 정지: 앞바퀴 축 → 정지선 가까운 끝 {gap * 100:+.1f} cm '
-                                       f'(+ = 선 앞, 오도메트리 추정, 규정 ±5 cm), {g("m3_wait_s")} s 대기 시작')
+                gap = self.wheel_gap(self._m3)
+                self.get_logger().info(f'[M3] 완전 정지: 바퀴 맨 앞 → 정지선 {gap * 100:+.1f} cm '
+                                       f'(+ = 선 앞, 0 아래면 밟음, 오도메트리 추정), {g("m3_wait_s")} s 대기 시작')
             if 'still_t' in self._m3 and now - self._m3['still_t'] >= g('m3_wait_s'):
                 cmd.stop = False
                 self._m3['go_from'] = self._pos
