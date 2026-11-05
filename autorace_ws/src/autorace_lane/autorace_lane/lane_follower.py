@@ -55,6 +55,8 @@ DETECTOR_PARAMS = {
     'sw_min_box_px': 8, 'sw_min_boxes': 3, 'sw_min_pixels': 50, 'sw_max_resid_px': 14.0,
     'sw_peak_min_px': 40, 'sw_max_peaks': 3, 'sw_cross_row_frac': 0.45, 'sw_side_default': -1,
     # LIMO 추가 (원본에 없음): 정지선 검출
+    'sw_single_normal': False,          # LIMO 추가 (시험용): 단선 중심을 선의 법선 방향으로 반 차폭. 2D 시뮬에서 3 차선 진입 코너는
+                                        # 실차형 카메라에서 8 cm 로 좋아졌지만 기본 카메라는 나빠지고 왼쪽 위 코너 14.5 → 9 cm — 기본은 원본 (가로)
     'stop_line_enabled': False, 'stop_line_min_cov': 0.9, 'stop_line_min_rows': 10, 'stop_line_max_deg': 15.0,
 }
 

@@ -1169,16 +1169,16 @@ class MissionManager(Node):
         near_c = [(x, y) for x, y in car if -0.5 < x < g('m8_look_m') and abs(y) < 1.0]
         gates = avoid.cone_gates(near_c, g('m8_gap_min_m'), br_)
         prev = m['target']
-        ref_y = 0.0
+        ref_y, ref_x = 0.0, None
         if prev is not None:
             cy_, sy_ = math.cos(self._yaw), math.sin(self._yaw)
             px_ = (prev[0] - self._pos[0]) * cy_ + (prev[1] - self._pos[1]) * sy_
             py_ = -(prev[0] - self._pos[0]) * sy_ + (prev[1] - self._pos[1]) * cy_
-            ref_y = py_ if px_ > 0.05 else 0.0
+            ref_y, ref_x = (py_, px_) if px_ > 0.05 else (0.0, None)
         # 이번 M8 에서 본 라바콘 (odom) — 끝에서 통로 축을 잡는다 (지나간 콘은 lidar_processor 기억에서 지워지므로 따로 모음).
         # 이어진 틈 줄의 양 끝 콘만 — 통로 밖 물체 (사람 다리) 는 진짜 줄 틈의 끝이 안 되므로 출구선 (m8_axis) 을 비틀지 않음
         odom_of = dict(zip(car, self._cones))
-        for q in avoid.gate_chain(gates, ref_y, **self.m8_chain_kw()):
+        for q in avoid.gate_chain(gates, ref_y, ref_x=ref_x, **self.m8_chain_kw()):
             for cp in q[3:5]:
                 cx, cy = odom_of[cp]
                 if all(math.dist((cx, cy), o) > 0.08 for o in m['seen']):
@@ -1217,7 +1217,7 @@ class MissionManager(Node):
         # 틈: 통로를 가로지르는 두 콘 (실제 빈 거리 = 중심 거리 − 몸통 지름 ≥ m8_gap_min_m) 의 가운데점을 이은 길에서
         # 앞 m8_aim_m 점을 따라감 (pure pursuit). 그런 틈이 없으면 (콘이 한 줄·흩어짐) 방향 순으로 이웃한 콘 사이 틈 (Follow-the-Gap)
         lim = math.radians(g('m8_max_heading_deg'))
-        aim = avoid.gate_aim(gates, g('m8_aim_m'), ref_y, **self.m8_chain_kw())
+        aim = avoid.gate_aim(gates, g('m8_aim_m'), ref_y, ref_x, **self.m8_chain_kw())
         on_axis = False
         if aim is None:                    # 마지막 틈을 지났으면 통로 출구선을 따라감 (곧게 가면 끝 쌍 방향으로 벗어남)
             ax = self.m8_axis()

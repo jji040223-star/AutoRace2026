@@ -67,7 +67,7 @@ class SlidingWindowLaneDetector:
                  sw_min_box_px=8, sw_min_boxes=3, sw_min_pixels=50, sw_max_resid_px=14.0,
                  sw_peak_min_px=40, sw_max_peaks=3, sw_cross_row_frac=0.45, sw_side_default=-1,
                  stop_line_enabled=False, stop_line_min_cov=0.9, stop_line_min_rows=10, stop_line_max_deg=15.0,
-                 stop_line_bev_depth_m=0.0, stop_line_lane_m=0.52):
+                 stop_line_bev_depth_m=0.0, stop_line_lane_m=0.52, sw_single_normal=False):
         self.roi_top_ratio = roi_top_ratio        # 프레임 하단 (1 - ratio) 부분만 사용
         self.min_pixels = min_pixels              # 한쪽을 신뢰하기 위한 최소 차선 픽셀 수
         self.single_line_offset = single_line_offset  # 차선 폭을 아직 모를 때의 폴백 offset
@@ -111,6 +111,9 @@ class SlidingWindowLaneDetector:
         self.sw_max_peaks = sw_max_peaks          # 프레임당 피크 시드 수
         self.sw_cross_row_frac = sw_cross_row_frac  # 정지선 행 제거 문턱 (가로 점유율)
         self.sw_side_default = sw_side_default    # 단선 분류 폴백 (-1 = 우측 경계)
+        # LIMO 추가: 단선 중심을 선의 법선 방향 (바닥 m 기준) 으로 반 차폭 떨어진 곳으로. False = 원본 (BEV 가로로 반 차폭)
+        self.sw_single_normal = sw_single_normal
+        self._prev_pair_mid = None                # 직전 프레임에서 고른 경계 쌍의 아래 가운데 x (쌍 고르기 연속성)
         # LIMO 추가 — 정지선 검출 (M3·M1). 차선용 use_white 와 따로, 흰색 마스크(노랑 뺌)에서 차로 폭을 가로지르는 줄을 찾는다
         self.stop_line_enabled = stop_line_enabled
         self.stop_line_min_cov = stop_line_min_cov    # 차로 가운데 0.9 폭 중 흰 픽셀 비율 (횡단보도 막대 ~0.56, 마름모 ~0.55 보다 높게)
@@ -128,6 +131,7 @@ class SlidingWindowLaneDetector:
         self._center_hint = center_hint
         self._prev_center = None   # 직전 프레임의 lane_center (guide 시드, 단선 좌·우 판정)
         self._sw_prev_fit = None   # 직전 유효 피팅 (a, b, c) — 다음 프레임 시드 연속성
+        self._prev_pair_mid = None
         self._bev_key = None
         self._bev_matrix = None
         self._bev_warned = False
@@ -498,12 +502,14 @@ class SlidingWindowLaneDetector:
                 sep = fits[j]['x_bot'] - fits[i]['x_bot']
                 if 0.7 * lw <= sep <= 1.4 * lw:
                     cost = abs(sep - lw) / lw
-                    if self._prev_center is not None:
-                        cost += 0.5 * abs((fits[i]['x_bot'] + fits[j]['x_bot']) / 2.0 - self._prev_center) / lw
+                    ref = self._prev_pair_mid if self._prev_pair_mid is not None else self._prev_center
+                    if ref is not None:     # 직전 쌍의 아래 가운데 (같은 단위) — 없으면 직전 최종 중심
+                        cost += 0.5 * abs((fits[i]['x_bot'] + fits[j]['x_bot']) / 2.0 - ref) / lw
                     if best_cost is None or cost < best_cost:
                         pair, best_cost = (fits[i], fits[j]), cost
 
         bands = []
+        self._prev_pair_mid = (pair[0]['x_bot'] + pair[1]['x_bot']) / 2.0 if pair else None
         if pair:
             fl, fr = pair
             chosen = [fl, fr]
@@ -533,11 +539,13 @@ class SlidingWindowLaneDetector:
             self._line_resid = best['resid']
             self._line_side = -1 if best['x_bot'] < w / 2.0 else 1
             self._line_slope = 2 * best['abc'][0] * (roi_h - 1) + best['abc'][1]
+            off = self._normal_offset(best, side, half, roi_h) if self.sw_single_normal else None
             for i in range(self.num_bands):
                 yc = roi_h - (i + 0.5) * band_h
                 if yc < best['y_lo'] - band_h or yc > best['y_hi'] + band_h:
                     continue
-                bands.append((ev(best, yc) + side * half, float(self.num_bands - i), i))
+                cx = float(np.interp(yc, off[0], off[1])) if off is not None else ev(best, yc) + side * half
+                bands.append((cx, float(self.num_bands - i), i))
             near_lanes = 1
         if not bands:
             self._sw_fail = 'noband'
@@ -550,6 +558,31 @@ class SlidingWindowLaneDetector:
             self._sw_fit_dbg.append([(int(round(ev(f, y))), int(y))
                                      for y in range(int(f['y_lo']), int(f['y_hi']) + 1, 4)])
         return bands, near_lanes, boxes_dbg
+
+    def _normal_offset(self, f, side, half, roi_h):
+        """단선 f 에서 바닥 기준 법선 방향으로 반 차폭 (half px = 가로 축척) 떨어진 중심 곡선 → (행 오름차순, x).
+        원본처럼 BEV 가로로 half 를 더하면 선이 차 축과 θ 기울 때 실제 거리는 half·cosθ (45° 면 0.26 → 0.18 m) 라
+        비스듬한 선 하나만 보이는 곳 (3 차선 진입 코너 등) 에서 차가 그 선에 붙고, 곡률도 선의 벌어짐을 따라 반대 부호가 났다.
+        BEV 축척은 가로·세로가 다르다: kx = lane_width_init / 차폭 m, ky = BEV 높이 / 깊이 m. 깊이를 모르면 None (원본 방식)."""
+        if self.stop_line_bev_depth_m <= 0 or self.stop_line_lane_m <= 0:
+            return None
+        kx = self._lane_width_init / self.stop_line_lane_m
+        ky = roi_h / self.stop_line_bev_depth_m
+        half_m = half / kx
+        a, b, c = f['abc']
+        y_lo, y_hi = f['y_lo'], f['y_hi']
+        ext = half_m * ky + 2.0                  # 법선으로 옮기면 행도 이만큼까지 밀림 → 선을 양 끝 접선으로 곧게 연장 (2 차 외삽은 안 함)
+        ys = np.arange(y_lo - ext, y_hi + ext + 1.0, 2.0)
+        yc_ = np.clip(ys, y_lo, y_hi)
+        sl = 2 * a * yc_ + b                     # dx/dy [px/px] (끝 밖은 끝 기울기)
+        xs = a * yc_ * yc_ + b * yc_ + c + sl * (ys - yc_)
+        tx, ty = sl / kx, 1.0 / ky               # 바닥 접선 (m / 행)
+        nn = np.hypot(tx, ty)
+        nx, ny = ty / nn, -tx / nn               # 법선, nx > 0 = 화면 오른쪽
+        cx = xs + side * half_m * nx * kx
+        cy = ys + side * half_m * ny * ky
+        o = np.argsort(cy)
+        return cy[o], cx[o]
 
     # ---------------------------------------------------------------- BEV, look-ahead, 곡률
     def _apply_birdeye(self, roi):

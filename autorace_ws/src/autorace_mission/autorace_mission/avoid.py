@@ -179,7 +179,7 @@ def gate_path(gates, preview=0.1):
     return psi, e, remain
 
 
-def gate_chain(gates, ref_y=0.0, step=(0.12, 0.6), jump=(0.25, 0.3), start=(0.35, 0.5), mu=2.5):
+def gate_chain(gates, ref_y=0.0, step=(0.12, 0.6), jump=(0.25, 0.3), start=(0.35, 0.5), mu=2.5, ref_x=None):
     """틈 중 가장 그럴듯하게 이어지는 줄 → [틈, …] (앞 순, cone_gates 의 원소). 줄이 없으면 [].
     A → B 로 이어짐: step[0] ≤ B.mx − A.mx ≤ step[1], |B.my − A.my| ≤ jump[0] + jump[1]·(B.mx − A.mx).
     줄의 첫 틈: 차 (0, 0) 에서 |my| ≤ start[0] + start[1]·mx.
@@ -188,10 +188,22 @@ def gate_chain(gates, ref_y=0.0, step=(0.12, 0.6), jump=(0.25, 0.3), start=(0.35
     통로 끝에서 진짜 줄이 짧아져도 직전 목표에서 먼 줄은 mu 로 진다. 차가 통로 가운데에 없어도 (코너에서 들어올 때) 되고,
     휘어진 통로도 된다. step[0] 은 대각 틈 (왼 i – 오 i+1, 가운데가 반 간격 0.15 m 뒤) 도 잇도록 0.15 보다 작게 (경계값은 피함)."""
     P = sorted((q for q in gates if q[0] > 0.05), key=lambda q: q[0])
+    if ref_x is not None:
+        # 닻: 직전 목표점 (ref_x, ref_y) 에서 이어질 수 있는 (옆 jump 규칙) 틈에서만 줄을 시작 — 통로 끝에서 진짜 틈이 1~2 개만
+        # 남아도 직전 목표에서 0.4~0.6 m 옆인 다리 줄은 시작조차 못 함 (점수 mu 로는 3 틈 다리 줄이 1 틈 진짜 줄을 이길 수 있음).
+        # 닻에서 이어지는 틈이 하나도 없을 때만 아래 차 기준 시작 규칙
+        ok = [abs(q[1] - ref_y) <= jump[0] + jump[1] * abs(q[0] - ref_x) and abs(q[1]) <= start[0] + start[1] * q[0] for q in P]
+        if any(ok):
+            return _chain_dp(P, ok, ref_y, step, jump, mu)
+    ok = [abs(q[1]) <= start[0] + start[1] * q[0] for q in P]
+    return _chain_dp(P, ok, ref_y, step, jump, mu)
+
+
+def _chain_dp(P, can_start, ref_y, step, jump, mu):
     best = [None] * len(P)                 # (점수, −옆 변화 합, 이전 번호)
     for i, q in enumerate(P):
         x, y = q[0], q[1]
-        if abs(y) <= start[0] + start[1] * x:
+        if can_start[i]:
             best[i] = (1.0 - mu * abs(y - ref_y), 0.0, -1)
         for k in range(i):
             if best[k] is None:
@@ -211,10 +223,10 @@ def gate_chain(gates, ref_y=0.0, step=(0.12, 0.6), jump=(0.25, 0.3), start=(0.35
     return out[::-1]
 
 
-def gate_aim(gates, look, ref_y=0.0, **chain_kw):
+def gate_aim(gates, look, ref_y=0.0, ref_x=None, **chain_kw):
     """차 (0, 0) → 이어진 틈 줄 (gate_chain) 가운데점들을 이은 길에서 길이 look 인 점 (모자라면 마지막 가운데점).
     줄이 없지만 차 앞 틈이 있으면 옆 위치가 ref_y 에 가장 가까운 틈 가운데점. 틈이 없으면 None."""
-    chain = gate_chain(gates, ref_y, **chain_kw)
+    chain = gate_chain(gates, ref_y, ref_x=ref_x, **chain_kw)
     if not chain:
         ahead = [q for q in gates if q[0] > 0.05]
         if not ahead:
