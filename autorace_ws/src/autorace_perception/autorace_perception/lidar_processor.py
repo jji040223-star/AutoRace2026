@@ -10,7 +10,7 @@
 라이다 높이 (시뮬 0.111 m) 에서 라바콘 단면은 지름 약 4.3 cm, 0.96° 간격이면 0.5 m 앞 5 점, 1.5 m 앞 1~2 점.
 기억: odom 좌표로 merge_m 안이면 같은 라바콘 (평균). 시간으로 지우지 않고, 차 진행 방향으로 pass_margin_m 넘게 뒤로 지나갔거나
 max_keep_m 넘게 멀어지거나, 그 자리를 비추는 빔이 free_frames 번 연속 그 너머까지 비어 있으면 (옮긴 사람 발 자리) 지운다.
-뎁스 장애물 (/perception/obstacles) 중 tall_min_h 보다 높은 것의 자리 (tall_keep_s 동안 기억) 에 있는 점은 내지 않는다 —
+뎁스 장애물 (/perception/obstacles) 중 높고 좁은 것의 바닥 상자 (tall_keep_s 동안 기억) 안의 점은 내지 않는다 —
 라이다 한 줄로는 사람 다리와 라바콘이 구분 안 되지만 높이는 다르다 (카메라 시야 앞 ±35° 안에서 본 것만). 리셋 (odom 이 0.5 m 넘게 튐) 이면 다 지운다.
 """
 import bisect
@@ -60,12 +60,19 @@ class LidarProcessor(Node):
         p('free_frames', 3)                # 기억 자리 너머까지 빈 스캔이 이만큼 연속이면 지움 (0 = 끔)
         p('free_clear_m', 0.10)            #   '너머' = 기억 거리 + 이만큼보다 멀리 맞음 (또는 반사 없음)
         p('free_win_m', 0.04)              #   기억 자리 좌우 이 폭 안 빔을 모두 봄 (먼 콘은 빔 사이로 빠질 수 있어 이웃 빔까지)
-        p('obstacles_topic', '/perception/obstacles')   # 뎁스 장애물 (높이 있음) — 높은 것 자리의 라이다 점은 라바콘 아님
-        p('tall_min_h', 0.35)              # 뎁스 장애물이 이보다 높으면 (사람 다리 등, 라바콘 0.19 m) 그 자리 점을 뺌 (0 = 끔)
-        p('tall_margin_m', 0.03)           #   뎁스 장애물 바닥 상자를 이만큼 넓혀서
-        p('tall_keep_s', 15.0)             #   이만큼 기억 (카메라 시야 밖으로 나가도)
+        p('free_frames_inf', 6)            # 너머가 '반사 없음' 뿐인 증거는 이만큼 (실제 라이다는 먼 콘 반사가 가끔 빠짐)
+        p('free_max_yaw_rate', 0.3)        # 이보다 빨리 돌면 지우기 판단 안 함 [rad/s] (스캔 한 바퀴 동안 돌아 방향이 비틀림)
+        p('obstacles_topic', '/perception/obstacles')   # 뎁스 장애물 (높이 있음) — 높은 것의 앞면에 있는 라이다 점은 라바콘 아님
+        p('tall_min_h', 0.35)              # 뎁스 장애물이 이보다 높으면 (사람 다리 등, 라바콘 0.19 m) (0 = 끔).
+        p('tall_floor_h', 0.27)            #   가까운 다리는 화면 위가 잘려 낮게 재짐 → 기준 = min(tall_min_h, 화면 위 높이 − 0.03), 이보다 낮게는 안 내림
+        p('tall_cam_h', 0.175)             #   뎁스 카메라 높이·세로 화각·숙임 (화면 위 높이 계산)
+        p('tall_cam_vfov_deg', 45.0)
+        p('tall_cam_pitch_deg', 0.0)
+        p('tall_max_w', 0.25)              #   이보다 넓은 장애물은 안 씀 (합쳐진 묶음·벽·LIMO)
+        p('tall_match_m', 0.04)            #   라이다 점이 그 장애물 바닥 상자 (이만큼 넓힘) 안이면 그 장애물의 점
+        p('tall_keep_s', 15.0)             #   이만큼 기억 — 차 옆·뒤 (카메라 시야 밖) 에서 발을 옮겨도 이전에 본 자리는 남게
         g = lambda k: self.get_parameter(k).value   # noqa: E731
-        self._tall = []                    # [(x0, x1, y0, y1 odom 축 정렬 상자, 시각)]
+        self._tall = []                    # [(차 x, y, yaw, x_near, x_far, y_right, y_left, 시각)] — 본 때 차 기준 바닥 상자
         self._odom = collections.deque(maxlen=200)    # (시각, x, y, yaw)
         self._pose = None
         self._cones = []                   # {'x', 'y', 'n', 'hits'}
@@ -144,6 +151,7 @@ class LidarProcessor(Node):
             else:
                 self._cones.append({'x': wx, 'y': wy, 'n': 1})
         self.clear_free(msg, pose)
+        self.prune_tall(stamp_s(msg.header))
         # 지나간 것·멀어진 것만 지움 (시간으로 안 지움)
         if self._pose is not None:
             qx, qy, qyaw = self._pose
@@ -168,7 +176,7 @@ class LidarProcessor(Node):
             self.get_logger().info(f'라바콘 기억 {len(keep)} 개 (이번 스캔 묶음 {len(now_cl)} 개)')
 
     def on_obstacles(self, msg):
-        """뎁스 장애물 중 높은 것 (사람 다리·의자 등 — 라이다로는 라바콘과 구분 안 되는 가는 기둥) 의 바닥 상자를 odom 으로 기억."""
+        """뎁스 장애물 중 높은 것 (사람 다리·의자 등 — 라이다로는 라바콘과 구분 안 되는 가는 기둥) 의 바닥 상자를 본 때 차 자세와 같이 기억."""
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         if g('tall_min_h') <= 0:
             return
@@ -178,20 +186,41 @@ class LidarProcessor(Node):
             return
         px, py, yaw = pose
         c, s = math.cos(yaw), math.sin(yaw)
-        mg = g('tall_margin_m')
+        top = math.radians(g('tall_cam_vfov_deg') / 2.0 - g('tall_cam_pitch_deg'))
         for o in msg.obstacles:
-            if o.height < g('tall_min_h'):
+            if o.y_left - o.y_right > g('tall_max_w'):
                 continue
-            xs, ys = [], []
-            for bx in (o.x_near - mg, o.x_far + mg):
-                for by in (o.y_right - mg, o.y_left + mg):
-                    xs.append(px + c * bx - s * by)
-                    ys.append(py + s * bx + c * by)
-            self._tall.append((min(xs), max(xs), min(ys), max(ys), t))
-        self._tall = [b for b in self._tall if t - b[4] < g('tall_keep_s')][-200:]
+            h_top = g('tall_cam_h') + max(0.0, o.x_near) * math.tan(top)
+            thr = max(g('tall_floor_h'), min(g('tall_min_h'), h_top - 0.03))
+            if o.height < thr:
+                continue
+            self._tall.append((px, py, yaw, o.x_near, o.x_far, o.y_right, o.y_left, t))
+        self.prune_tall(t)
+
+    def prune_tall(self, t):
+        self._tall = [b for b in self._tall if t - b[7] < self.get_parameter('tall_keep_s').value][-200:]
 
     def is_tall(self, x, y):
-        return any(b[0] <= x <= b[1] and b[2] <= y <= b[3] for b in self._tall)
+        """라이다 점 (odom) 이 기억한 높은 장애물의 바닥 상자 (본 때의 차 좌표 기준, tall_match_m 만큼 넓힘) 안 — 그 장애물의 점.
+        폭이 넓은 묶음 (사람 + 콘이 합쳐진 것 등) 은 on_obstacles 에서 이미 뺐다 (tall_max_w)."""
+        m = self.get_parameter('tall_match_m').value
+        for px, py, yaw, xn, xf, yr, yl, _ in self._tall:
+            c, s = math.cos(yaw), math.sin(yaw)
+            bx, by = (x - px) * c + (y - py) * s, -(x - px) * s + (y - py) * c
+            if xn - m <= bx <= max(xf, xn + 0.05) + m and yr - m <= by <= yl + m:
+                return True
+        return False
+
+    def yaw_rate(self):
+        h = self._odom
+        if len(h) < 2:
+            return 0.0
+        t1, _, _, y1 = h[-1]
+        for t0, _, _, y0 in reversed(h):
+            if t1 - t0 >= 0.15:
+                d = math.atan2(math.sin(y1 - y0), math.cos(y1 - y0))
+                return d / (t1 - t0)
+        return 0.0
 
     def clear_free(self, msg, pose):
         """기억한 점 자리를 이번 스캔이 비추는데 그 너머까지 비어 있으면 (그 방향 ±free_win_m 안 빔이 모두 기억 거리 + free_clear_m
@@ -204,6 +233,8 @@ class LidarProcessor(Node):
         if r.size == 0 or msg.angle_increment == 0.0:
             return
         r = np.where(np.isfinite(r) & (r >= msg.range_min), r, np.inf)
+        if abs(self.yaw_rate()) > g('free_max_yaw_rate'):
+            return                             # 도는 중: 스캔 한 바퀴 동안 방향이 비틀려 진짜 콘 옆을 볼 수 있음
         px, py, yaw = pose
         lx0, ly0 = px + g('laser_x') * math.cos(yaw), py + g('laser_x') * math.sin(yaw)
         rmin, rmax = max(g('range_min'), msg.range_min), min(g('range_max'), msg.range_max)
@@ -214,18 +245,22 @@ class LidarProcessor(Node):
             b = math.atan2(dy, dx) - yaw
             b = math.atan2(math.sin(b), math.cos(b))
             if not (rmin + 0.05 < d < rmax - 0.05) or abs(b) > math.radians(g('fov_deg')):
-                k['miss'] = 0                  # 안 보이는 자리 — 판단 안 함
+                k['miss'] = k['miss_fin'] = 0  # 안 보이는 자리 — 판단 안 함
                 keep.append(k)
                 continue
             half = max(1, int(math.ceil(math.atan2(g('free_win_m'), d) / abs(msg.angle_increment))))
             i = int(round((b - msg.angle_min) / msg.angle_increment)) % r.size
             idx = [(i + j) % r.size for j in range(-half, half + 1)]
-            if float(r[idx].min()) > d + g('free_clear_m'):
+            near_r = float(r[idx].min())
+            if near_r > d + g('free_clear_m'):
+                # 너머에서 맞은 빔이 있으면 확실한 빈 자리, 모두 '반사 없음' 이면 약한 증거 (실제 라이다는 먼 콘 반사가 가끔 빠짐)
+                fin = math.isfinite(near_r) or np.isfinite(r[idx]).any()
                 k['miss'] = k.get('miss', 0) + 1
-                if k['miss'] >= g('free_frames'):
+                k['miss_fin'] = k.get('miss_fin', 0) + int(fin)
+                if k['miss_fin'] >= g('free_frames') or k['miss'] >= g('free_frames_inf'):
                     continue                   # 지움
             else:
-                k['miss'] = 0
+                k['miss'] = k['miss_fin'] = 0
             keep.append(k)
         self._cones = keep
 
