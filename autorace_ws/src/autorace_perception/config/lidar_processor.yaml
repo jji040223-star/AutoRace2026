@@ -17,3 +17,9 @@ lidar_processor:
     min_hits: 2
     pass_margin_m: 0.4                  # 진행 방향으로 이만큼 지나간 뒤에 지움 (시간으로 안 지움)
     max_keep_m: 3.0
+    free_frames: 3                      # 기억 자리 너머까지 빈 스캔이 이만큼 연속이면 지움 — 트랙 옆 사람이 발을 옮긴 자리 (0 = 끔)
+    free_clear_m: 0.10
+    free_win_m: 0.04
+    tall_min_h: 0.35                    # 뎁스 장애물이 이보다 높은 자리의 점은 라바콘 아님 (사람 다리; 라바콘 0.19 m). 0 = 끔
+    tall_margin_m: 0.03
+    tall_keep_s: 15.0

@@ -153,6 +153,8 @@ class Sim2D(Node):
         p('sign_range_m', 4.5)
         p('bystanders', [0.0])             # 트랙 옆 사람 다리 [x, y, x, y, …] (각 점 = 다리 하나, 지름 bystander_d). [0.0] = 없음
         p('bystander_d', 0.09)
+        p('bystander_step', [0.0, 0.0])    # 사람이 발을 옮김: bystander_step_s 마다 다리가 이만큼 [dx, dy] 갔다 왔다 (0 = 가만히)
+        p('bystander_step_s', 2.0)
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.g = g
         self.rng = random.Random(g('seed') or None)
@@ -264,6 +266,7 @@ class Sim2D(Node):
                 # 몸통 (라이다 높이 0.111 m 에서 지름 약 4.3 cm) + 바닥판
                 self.boxes.append(Box('cone', x, y, 0.0, 0.0215, 0.0215, 0.012, 0.19, (0xff, 0x6a, 0x13), name=f'cone_{i}'))
                 self.boxes.append(Box('cone_base', x, y, 0.0, 0.055, 0.055, 0.0, 0.012, (0x22, 0x22, 0x22), name=f'cone_{i}'))
+        self._leg_home = []
         bs = list(g('bystanders'))
         for i in range(len(bs) // 2):
             h = g('bystander_d') / 2
@@ -279,6 +282,17 @@ class Sim2D(Node):
             self.boxes.append(Box('sign', x, y, math.radians(face), 0.005, 0.06, 0.14, 0.26, col, name=name))
         self.hits = {}
         self.knocked = set()
+
+    def move_bystanders(self):
+        st = list(self.g('bystander_step'))
+        if len(st) < 2 or (st[0] == 0.0 and st[1] == 0.0) or self.g('bystander_step_s') <= 0:
+            return
+        k = int((self.sim_t - self.light_t0) / self.g('bystander_step_s')) % 2
+        legs = [b for b in self.boxes if b.kind == 'leg']
+        if not hasattr(self, '_leg_home') or len(self._leg_home) != len(legs):
+            self._leg_home = [(b.x, b.y) for b in legs]
+        for b, (hx, hy) in zip(legs, self._leg_home):
+            b.x, b.y = hx + k * st[0], hy + k * st[1]
 
     def light_color(self):
         r, gr, ye = self.g('light_s')
@@ -467,6 +481,7 @@ class Sim2D(Node):
                 for sx, sy in ((1, 1), (1, -1), (-1, -1), (-1, 1))]
 
     def step(self):
+        self.move_bystanders()
         import time
         g = self.g
         now = time.monotonic()
