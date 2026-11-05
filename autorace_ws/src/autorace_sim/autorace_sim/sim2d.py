@@ -151,6 +151,8 @@ class Sim2D(Node):
         p('seed', 0)
         p('fake_detections', True)         # YOLO 대신: 보이는 표지판·신호등 박스를 /perception/detections, /perception/traffic_light_detections 로
         p('sign_range_m', 4.5)
+        p('bystanders', [0.0])             # 트랙 옆 사람 다리 [x, y, x, y, …] (각 점 = 다리 하나, 지름 bystander_d). [0.0] = 없음
+        p('bystander_d', 0.09)
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.g = g
         self.rng = random.Random(g('seed') or None)
@@ -262,6 +264,10 @@ class Sim2D(Node):
                 # 몸통 (라이다 높이 0.111 m 에서 지름 약 4.3 cm) + 바닥판
                 self.boxes.append(Box('cone', x, y, 0.0, 0.0215, 0.0215, 0.012, 0.19, (0xff, 0x6a, 0x13), name=f'cone_{i}'))
                 self.boxes.append(Box('cone_base', x, y, 0.0, 0.055, 0.055, 0.0, 0.012, (0x22, 0x22, 0x22), name=f'cone_{i}'))
+        bs = list(g('bystanders'))
+        for i in range(len(bs) // 2):
+            h = g('bystander_d') / 2
+            self.boxes.append(Box('leg', bs[2 * i], bs[2 * i + 1], 0.0, h, h, 0.0, 0.9, (0x30, 0x40, 0x70), name=f'leg_{i}'))
         if g('traffic_light'):
             self.boxes.append(Box('light', 3.95, 4.47, math.pi, 0.035, 0.06, 0.10, 0.305, (0x15, 0x15, 0x15), name='traffic_light'))
             self.boxes.append(Box('pole', 3.95, 4.47, 0.0, 0.01, 0.01, 0.0, 0.10, (0x30, 0x30, 0x30), name='light_pole'))
@@ -487,7 +493,7 @@ class Sim2D(Node):
         rect = self.car_rect(nx, ny, nyaw)
         blocked = None
         for b in self.boxes:
-            if b.alive and b.kind in ('limo', 'cone', 'cone_base', 'light', 'pole', 'monitor') and \
+            if b.alive and b.kind in ('limo', 'cone', 'cone_base', 'light', 'pole', 'monitor', 'leg') and \
                     (b.x - nx) ** 2 + (b.y - ny) ** 2 < 0.6 and rects_overlap(rect, b.corners2d()):
                 if b.kind.startswith('cone'):
                     if b.name not in self.knocked:

@@ -4,7 +4,7 @@
   hits / margins / escape / free / rot_ok : 차 사각형 (반 길이·반 폭 + 여유) 을 곧게 밀거나 제자리에서 돌려 보며 상자와 겹침 검사
   scan_boxes                              : 라이다 점 (base_link) → 그 평면의 작은 상자 — 뎁스 기억이 가까이서 틀려도 실제 거리로
   arc_clear                               : 곡률 후보마다 그 호를 따라 갈 때 상자까지 최소 여유 (여유 사다리로)
-  cone_gates / gate_path / gate_aim       : M8 라바콘 사이 '틈' (통로를 가로지르는 두 콘) 과 그 가운데점을 이은 길에서 차의 옆 오차·길 방향
+  cone_gates / gate_chain / gate_path / gate_aim : M8 라바콘 사이 '틈' (통로를 가로지르는 두 콘) 과 그 가운데점을 이은 길에서 차의 옆 오차·길 방향
   StuckMonitor                            : 명령은 움직이라는데 check_s 동안 move_m·rot_deg 도 못 움직임 (밀고 있음)
   RetryCounter                            : 같은 자리 (radius 안) 재시도 횟수
 """
@@ -125,7 +125,7 @@ def arc_clear(kappas, boxes, length, steps=(0.0, 0.01, 0.02, 0.03, 0.04, 0.05, 0
 def cone_gates(cones, gap_min, body_r, max_center=0.8, max_skew_deg=50.0):
     """라바콘 (차 좌표 x 앞, y 왼쪽) 두 개씩 묶은 틈 중 통로를 가로지르는 것: 실제 빈 거리 (중심 거리 − 몸통 지름) ≥ gap_min,
     중심 거리 ≤ max_center, 두 콘을 잇는 선이 진행 방향과 거의 수직 (max_skew_deg 안 — 같은 줄 콘끼리는 빠짐), 가운데가 차 앞.
-    → [(mx, my, gap)] 가운데 x 순."""
+    → [(mx, my, gap, 콘 a, 콘 b)] 가운데 x 순."""
     out = []
     skew = math.radians(max_skew_deg)
     for i, a in enumerate(cones):
@@ -138,7 +138,7 @@ def cone_gates(cones, gap_min, body_r, max_center=0.8, max_skew_deg=50.0):
                 continue
             mx, my = (a[0] + b[0]) / 2, (a[1] + b[1]) / 2
             if mx > -0.3:                  # 옆·조금 뒤 틈도 (지금 차가 있는 길 조각)
-                out.append((mx, my, d - 2 * body_r))
+                out.append((mx, my, d - 2 * body_r, a, b))
     return sorted(out)
 
 
@@ -146,7 +146,7 @@ def gate_path(gates, preview=0.1):
     """틈 가운데점을 앞 순으로 이은 길 (차 좌표). 차 (0, 0) 에서 가장 가까운 점과 그 preview 앞의 길 방향, 옆 오차.
     → (길 방향 psi [rad, 왼쪽 +], 옆 오차 e [m, 길이 차 왼쪽에 있으면 +], 앞으로 남은 길 길이) 또는 None (가운데점 2 개 미만)."""
     pts = []
-    for mx, my, _ in gates:
+    for mx, my, *_ in gates:
         if not pts or mx > pts[-1][0] + 0.05:    # 거의 같은 깊이의 틈은 앞 것만
             pts.append((mx, my))
     if len(pts) < 2:
@@ -179,12 +179,49 @@ def gate_path(gates, preview=0.1):
     return psi, e, remain
 
 
-def gate_aim(gates, look):
-    """차 (0, 0) → 틈 가운데점들을 앞 순으로 이은 길에서 길이 look 인 점 (모자라면 마지막 가운데점). 틈이 없으면 None."""
-    pts = [(0.0, 0.0)] + [(mx, my) for mx, my, _ in gates if mx > 0.05]
-    pts = [p for i, p in enumerate(pts) if i == 0 or p[0] > pts[i - 1][0] + 0.05] if len(pts) > 1 else pts
-    if len(pts) < 2:
-        return None
+def gate_chain(gates, ref_y=0.0, step=(0.12, 0.6), jump=(0.25, 0.3), start=(0.35, 0.5), mu=2.5):
+    """틈 중 가장 그럴듯하게 이어지는 줄 → [틈, …] (앞 순, cone_gates 의 원소). 줄이 없으면 [].
+    A → B 로 이어짐: step[0] ≤ B.mx − A.mx ≤ step[1], |B.my − A.my| ≤ jump[0] + jump[1]·(B.mx − A.mx).
+    줄의 첫 틈: 차 (0, 0) 에서 |my| ≤ start[0] + start[1]·mx.
+    점수 = 틈 수 − mu·|첫 틈 my − ref_y| (ref_y = 직전에 따라가던 목표점의 옆 위치), 같으면 옆 변화 합이 작은 것.
+    통로 밖 물체 (트랙 밖 사람 다리 등) 와 바깥 줄 라바콘이 만든 틈은 통로 줄에서 0.4 m 넘게 떨어져 짧은 줄밖에 못 만들고,
+    통로 끝에서 진짜 줄이 짧아져도 직전 목표에서 먼 줄은 mu 로 진다. 차가 통로 가운데에 없어도 (코너에서 들어올 때) 되고,
+    휘어진 통로도 된다. step[0] 은 대각 틈 (왼 i – 오 i+1, 가운데가 반 간격 0.15 m 뒤) 도 잇도록 0.15 보다 작게 (경계값은 피함)."""
+    P = sorted((q for q in gates if q[0] > 0.05), key=lambda q: q[0])
+    best = [None] * len(P)                 # (점수, −옆 변화 합, 이전 번호)
+    for i, q in enumerate(P):
+        x, y = q[0], q[1]
+        if abs(y) <= start[0] + start[1] * x:
+            best[i] = (1.0 - mu * abs(y - ref_y), 0.0, -1)
+        for k in range(i):
+            if best[k] is None:
+                continue
+            dx, dy = x - P[k][0], abs(y - P[k][1])
+            if step[0] <= dx <= step[1] and dy <= jump[0] + jump[1] * dx:
+                cand = (best[k][0] + 1.0, best[k][1] - dy, k)
+                if best[i] is None or cand[:2] > best[i][:2]:
+                    best[i] = cand
+    if not any(best):
+        return []
+    i = max((k for k in range(len(P)) if best[k]), key=lambda k: best[k][:2])
+    out = []
+    while i >= 0:
+        out.append(P[i])
+        i = best[i][2]
+    return out[::-1]
+
+
+def gate_aim(gates, look, ref_y=0.0, **chain_kw):
+    """차 (0, 0) → 이어진 틈 줄 (gate_chain) 가운데점들을 이은 길에서 길이 look 인 점 (모자라면 마지막 가운데점).
+    줄이 없지만 차 앞 틈이 있으면 옆 위치가 ref_y 에 가장 가까운 틈 가운데점. 틈이 없으면 None."""
+    chain = gate_chain(gates, ref_y, **chain_kw)
+    if not chain:
+        ahead = [q for q in gates if q[0] > 0.05]
+        if not ahead:
+            return None
+        q = min(ahead, key=lambda q: abs(q[1] - ref_y))
+        return q[0], q[1]
+    pts = [(0.0, 0.0)] + [(q[0], q[1]) for q in chain]
     left = look
     for p, q in zip(pts, pts[1:]):
         seg = math.dist(p, q)
