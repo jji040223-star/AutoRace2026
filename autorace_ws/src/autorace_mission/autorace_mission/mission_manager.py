@@ -110,6 +110,7 @@ class MissionManager(Node):
         p('m5_labels', ['slow', 'speed_bump'])
         p('m5_min_conf', 0.5)
         p('m5_min_box_px', 20)
+        p('m5_max_box_px', 200)            # 이보다 큰 박스는 오인식 (실차 3차선에서 화면 가득 478px 과속방지턱 → 괜히 서행, 11-05)
         p('m5_confirm_frames', 3)
         p('m5_speed', 0.15)
         p('m5_release_m', 1.5)
@@ -205,6 +206,8 @@ class MissionManager(Node):
         p('m7_align_timeout_s', 3.0)
         p('m7_pass_margin_m', 0.30)        # 장애물 기억은 뒷면이 차 뒤끝보다 이만큼 뒤로 지나간 뒤에 지움 (시간으로 안 지움)
         p('m7_axis_snap_deg', 90.0)        # 차로 방향을 이 단위로 맞춤 (0 = 안 맞춤)
+        p('m7_axis0_frames', 30)           # 출발 직선에서 트랙 축을 잴 프레임 수 (0 = 안 잼, odom 0° 를 트랙 축으로)
+        p('m7_axis_need_yaw0', True)        # 트랙 축을 못 쟀으면 90° 로 맞추지 않고 잰 방향 그대로
         p('m7_axis_frames', 20)            # 차로 방향 추정에 쓰는 최근 /lane/state 수
         p('m7_line_fix', True)             # 맨 왼쪽·맨 오른쪽 차로에서 노란 바깥선 하나만 보이면, 그 선으로 잰 차로 가운데와 격자 중심의 차이로
                                            # 격자를 옮김 (격자는 LIMO 로 잡은 그대로 + 이 보정. LIMO 가 차로 가운데에 없거나 오도메트리가 틀어져도)
@@ -270,7 +273,11 @@ class MissionManager(Node):
         p('m2_without_m7', True)           # M7 을 건너뛰어도 (정적 장애물 없음) 3차선에서 표지판 쪽 바깥 차로로 옮겨 갈림길을 따른다
         p('m2_zone_frames', 10)            # 노란 선이 한쪽만 보이는 프레임이 이만큼 연속 → 3차선 구간 (차로 번호: 왼쪽 선 = 맨 왼쪽 차로)
         p('m2_shift_speed', 0.2)           # 차로 옮길 때 속도 [m/s]
-        p('m2_shift_look_m', 0.5)          # pure pursuit 앞 거리
+        p('m2_shift_look_m', 0.8)          # pure pursuit 앞 거리 (길수록 완만)
+        p('m2_shift_delay_m', 0.8)         # 표지판·3차선 구간을 알아챈 뒤 이만큼 더 가서 옮김 (입구는 도로가 비스듬히 넓어져 선을 밟음)
+        p('m2_axis_frames', 15)            # 차로 방향 = 3차선 구간에 들어온 뒤 (yaw + 차선 방향) 평균 (이만큼 모이면). 90° 로 맞추지 않음 —
+                                           #   실차는 센서를 켠 뒤 차를 옮겨 오도메트리 0° 가 트랙과 43° 틀어져 대각선으로 나갔다 (11-05)
+        p('m2_shift_abort_deg', 40.0)      # 옮기는 중 차로 방향과 이보다 틀어지면 포기
         p('m2_shift_tol_m', 0.04)          # 목표 차로 중심과 이만큼 안 + 방향 5° 안이면 옮기기 끝
         p('m2_shift_max_m', 3.0)           # 이만큼 가도 못 옮기면 포기 (차선 추종으로 돌아감)
         p('m2_hold_m', 2.5)                # 잠금 (분기점 가까움) 뒤 이만큼 갈 때까지 표지판 쪽 선만 따라감 → 갈림길 지남
@@ -309,8 +316,10 @@ class MissionManager(Node):
         self._m4_sign = False              # 갈림길 뒤에 주차 표지판을 봄
         self._light = None                 # 마지막 /perception/traffic_light
         self._lane = None                  # 마지막 /lane/state
-        self._m2z = {'single': 0, 'side_obs': 0, 'zone': None, 'shift': None, 'hold': None, 'both': 0}   # M7 없이 M2 (m2_without_m7)
+        self._m2z = {'single': 0, 'side_obs': 0, 'zone': None, 'shift': None, 'hold': None, 'both': 0,
+                     'dirs': collections.deque(maxlen=60), 'seen_at': None}   # M7 없이 M2 (m2_without_m7)
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
+        self._yaw0, self._yaw0_buf = None, []   # 트랙 축 (출발 직선의 차선 방향, odom) — 차로 방향을 이 축 기준 90° 단위로 맞춤
         self._obs = []                     # 장애물 기억 (오도메트리 좌표): {'quads': 관측별 꼭짓점 4 개, 'c': 중심, 'seen': 시각}
         self._m7_hits = 0
         self._m7 = {}
@@ -393,6 +402,9 @@ class MissionManager(Node):
         self._resid_hits = self._m7_hits = 0
         self._m3, self._m7, self._obs = {}, {}, []
         self._m2 = {'side': None, 'cand': None, 'n': 0, 'done': False, 'locked': False}
+        self._m2z = {'single': 0, 'side_obs': 0, 'zone': None, 'shift': None, 'hold': None, 'both': 0,
+                     'dirs': collections.deque(maxlen=60), 'seen_at': None}
+        self._yaw0, self._yaw0_buf = None, []
         self._m3_cooldown_from = None
         self._odom_hist.clear()
         self._cones, self._m8, self._m8_hits, self._m8_done, self._m8_slow_until = [], {}, 0, False, 0.0
@@ -428,7 +440,7 @@ class MissionManager(Node):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.m2_update(msg)
         m3 = [d for d in self.hits(msg, 'm3') if d.y2 - d.y1 <= g('m3_max_box_px')]
-        m5 = self.hits(msg, 'm5')
+        m5 = [d for d in self.hits(msg, 'm5') if d.y2 - d.y1 <= g('m5_max_box_px')]
         m4 = self.hits(msg, 'm4')
         if m4 and self._hits['m4'] >= g('m4_confirm_frames') and not self._m4_sign and self.done_or_skipped('M2'):
             best = max(m4, key=lambda d: d.confidence)
@@ -512,6 +524,7 @@ class MissionManager(Node):
         if self.state == 'M7_AVOID' and g('m7_line_fix'):
             self.m7_line_fix(msg)
         self.m2_zone_update(msg)
+        self.track_axis_update(msg)
         # 정지선 거리 (M3·M1 공통)
         if self.state == 'M3_APPROACH':
             self.line_update(self._m3, msg, 'M3', '표지판')
@@ -693,6 +706,26 @@ class MissionManager(Node):
                 keep.append(ob)
         self._obs = keep
 
+    def track_axis_update(self, msg):
+        """출발 직선 (노란 선 양쪽, 곧음) 의 차선 방향 m7_axis0_frames 장 평균 = 트랙 축. 오도메트리 0° 가 트랙과 틀어져 있어도
+        (실차: 센서를 켠 뒤 차를 옮김 — 11-05 에 43°) 차로 방향을 이 축 기준 90° 단위로 맞출 수 있게."""
+        n = int(self.get_parameter('m7_axis0_frames').value)
+        if self._yaw0 is not None or n <= 0 or not msg.found or msg.yellow_side != 2 or abs(msg.curvature) > 0.05:
+            return
+        pose = self.pose_at(stamp_s(msg.header))
+        if pose is None:
+            return
+        self._yaw0_buf.append(wrap(pose[2] + msg.lane_heading_rad))
+        if len(self._yaw0_buf) >= n:
+            b = self._yaw0_buf
+            m = math.atan2(sum(math.sin(a) for a in b), sum(math.cos(a) for a in b))
+            if max(abs(wrap(a - m)) for a in b) < math.radians(8.0):
+                self._yaw0 = m
+                self.get_logger().info(f'[축] 트랙 축 = odom {math.degrees(m):.1f}° (출발 직선 차선 방향 {n} 장) — '
+                                       f'차로 방향은 이 축 기준 {self.get_parameter("m7_axis_snap_deg").value:.0f}° 단위')
+            else:
+                self._yaw0_buf = b[n // 2:]   # 흔들림 — 반만 남기고 더 모음
+
     def lane_axis(self):
         """차로 방향: 최근 (yaw + 차선 방향) 중앙값 → m7_axis_snap_deg 단위로 (트랙 직선은 출발 방향과 평행·직각)."""
         g = lambda k: self.get_parameter(k).value   # noqa: E731
@@ -704,7 +737,14 @@ class MissionManager(Node):
         else:
             est, how = self._yaw, '지금 yaw'
         snap = math.radians(g('m7_axis_snap_deg'))
-        return (round(est / snap) * snap if snap > 0 else est), est, how
+        if snap <= 0:
+            return est, est, how
+        y0 = self._yaw0
+        if y0 is None:
+            if g('m7_axis_need_yaw0'):
+                return est, est, how + ', 트랙 축 모름 → 맞추지 않음'
+            y0 = 0.0
+        return wrap(y0 + round(wrap(est - y0) / snap) * snap), est, how + (f', 트랙 축 {math.degrees(self._yaw0):.1f}°' if self._yaw0 is not None else '')
 
     def m7_enter(self):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
@@ -1124,6 +1164,10 @@ class MissionManager(Node):
         if ys in (-1, 1):
             z['single'] += 1
             z['side_obs'] = ys
+            if z['zone'] is not None and z['shift'] is None and 0.0 < msg.line_resid_px < g('m6_resid_off'):
+                pose = self.pose_at(stamp_s(msg.header))
+                if pose is not None:
+                    z['dirs'].append(wrap(pose[2] + msg.lane_heading_rad))
         else:
             z['single'] = 0
         if z['zone'] is None and z['single'] >= g('m2_zone_frames') and self.state == 'LANE':
@@ -1144,7 +1188,12 @@ class MissionManager(Node):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         z, m = self._m2z, self._m2
         last = g('m7_lanes') - 1
-        if self.state == 'LANE' and z['zone'] is not None and z['shift'] is None and z['hold'] is None and m['side']:
+        if m['side'] and z['seen_at'] is None:
+            z['seen_at'] = self._pos
+        ready = (z['zone'] is not None and z['seen_at'] is not None
+                 and min(self.dist_from(z['zone']), self.dist_from(z['seen_at'])) >= g('m2_shift_delay_m')
+                 and len(z['dirs']) >= g('m2_axis_frames'))
+        if self.state == 'LANE' and ready and z['shift'] is None and z['hold'] is None and m['side']:
             cur = 0 if z['side_obs'] < 0 else last
             tgt = 0 if m['side'] == 'A' else last
             if cur == tgt:
@@ -1152,12 +1201,16 @@ class MissionManager(Node):
                 self.get_logger().info(f'[M2] 표지판 {m["side"]} — 이미 {"맨 왼쪽" if tgt == 0 else "맨 오른쪽"} 차로, '
                                        f'갈림길까지 {"왼쪽" if tgt == 0 else "오른쪽"} 선만 따라감')
             else:
-                axis, est, how = self.lane_axis()
+                recent = list(z['dirs'])[-int(g('m2_axis_frames')):]
+                axis = math.atan2(sum(math.sin(a) for a in recent), sum(math.cos(a) for a in recent))
+                spread = max(abs(wrap(a - axis)) for a in recent)
+                if spread > math.radians(15.0) or abs(wrap(self._yaw - axis)) > math.radians(20.0):
+                    return                 # 차선 방향이 아직 흔들림 (코너 끝) — 다음 주기에
                 dl = (cur - tgt) * g('m7_lane_width_m')       # + = 왼쪽 (차로 번호는 왼쪽이 0)
                 z['shift'] = {'origin': self._pos, 'axis': axis, 'dl': dl, 'side': m['side']}
                 self.set_state('M2_SHIFT', f'표지판 {m["side"]} → 차로 {cur} 에서 {tgt} 로 {abs(dl):.2f} m '
-                                           f'{"왼쪽" if dl > 0 else "오른쪽"}, 차로 방향 {math.degrees(axis):.0f}° '
-                                           f'(추정 {math.degrees(est):.1f}°, {how}), odom {self.fmt(self._pos)}')
+                                           f'{"왼쪽" if dl > 0 else "오른쪽"}, 차로 방향 {math.degrees(axis):.1f}° '
+                                           f'(3차선 차선 방향 {len(recent)} 장, 흩어짐 ±{math.degrees(spread):.1f}°), odom {self.fmt(self._pos)}')
         if self.state == 'M2_SHIFT':
             sh = z['shift']
             c, sn = math.cos(sh['axis']), math.sin(sh['axis'])
@@ -1172,16 +1225,18 @@ class MissionManager(Node):
                 self.set_state('LANE', f'차로 옮기기 끝 ({sc:.2f} m 가서 옆 {lc:+.2f} m), '
                                        f'갈림길까지 {"왼쪽" if sh["side"] == "A" else "오른쪽"} 선만 따라감 → 슬라이딩 윈도우 리셋')
                 return
-            if sc > g('m2_shift_max_m'):
+            if sc > g('m2_shift_max_m') or abs(psi) > math.radians(g('m2_shift_abort_deg')):
                 self.m7_publish(0.0, 0.0)
                 z['hold'] = {'from': self._pos, 'side': sh['side']}
                 self._reset_until = now + 0.5
-                self.get_logger().warn(f'[M2] {sc:.2f} m 가도 차로를 못 옮김 (옆 {lc:+.2f} / 목표 {sh["dl"]:+.2f} m) — 포기')
+                self.get_logger().warn(f'[M2] 차로 옮기기 포기: {sc:.2f} m 감, 옆 {lc:+.2f} / 목표 {sh["dl"]:+.2f} m, '
+                                       f'차로 방향과 {math.degrees(psi):+.0f}°')
                 self.set_state('LANE', '차로 옮기기 포기 → 차선 추종')
                 return
             L = g('m2_shift_look_m')
             v = g('m2_shift_speed')
-            alpha = wrap(math.atan2(err, L) - psi)
+            aim = max(-math.radians(30.0), min(math.radians(30.0), math.atan2(err, L)))   # 차로 방향과 30° 넘게 비틀지 않음
+            alpha = wrap(aim - psi)
             w = max(-1.0, min(1.0, 2.0 * v * math.sin(alpha) / L))
             self.m7_publish(v, w)
             return

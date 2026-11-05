@@ -112,6 +112,7 @@ class Sim2D(Node):
         p('height', 480)
         p('hfov_deg', 71.0)
         p('cam_x', 0.084)
+        p('odom_yaw0_deg', 0.0)            # 출발 때 오도메트리 yaw (실차는 센서를 켠 뒤 차를 옮기면 트랙과 틀어짐)
         p('wheel_r', 0.045)                # 바퀴 반지름 — 정지선 앞 정지 판정 (바퀴 맨 앞 = 앞바퀴 축 + 반지름)
         p('cam_y', 0.0)
         p('cam_height', 0.175)
@@ -252,7 +253,8 @@ class Sim2D(Node):
             self.start = (g('start_x'), g('start_y'), math.radians(g('start_yaw_deg')))
         self.x, self.y, self.yaw = self.start
         self.v = self.w = 0.0
-        self.ox = self.oy = self.oyaw = 0.0        # 오도메트리 (출발 자세 기준, 오차 포함)
+        self.ox = self.oy = 0.0                     # 오도메트리 (출발 자세 기준, 오차 포함)
+        self.oyaw = math.radians(self.g('odom_yaw0_deg'))   # 실차처럼 오도메트리 0° 가 트랙과 틀어져 있을 때 흉내
         self.imu_yaw = 0.0
         self.light_t0 = self.sim_t
         self.branch = self.rng.choice('AB') if g('branch_sign') == 'random' else str(g('branch_sign')).upper()
