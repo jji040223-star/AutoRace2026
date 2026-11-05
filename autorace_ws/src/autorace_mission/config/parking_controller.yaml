@@ -7,6 +7,9 @@ parking_controller:
     bay_d: 0.60                         # 칸 안쪽 깊이 [m]
     approach_speed: 0.10
     wait_detect_m: 0.9                  # 통합 모드: 차선 추종 중 앞옆 이 거리 안에 주차 LIMO 가 보이면 접근 시작
+    wait_min_pts: 10                    #   점 이만큼 이상 + 앞뒤 wait_min_len_m 이상 + wait_confirm 번 연속 (표지판 받침대·의자 다리 거름)
+    wait_min_len_m: 0.15
+    wait_confirm: 3
     row_keep_k: 1.5                     # 주차 LIMO 줄과 옆 거리 유지 (방향 보정 [rad/m], ±row_keep_max_deg)
     row_keep_max_deg: 6.0
     side_probe_dx: 0.04                 # 차 중심 옆 라이다 띠 (진행 방향 ±)

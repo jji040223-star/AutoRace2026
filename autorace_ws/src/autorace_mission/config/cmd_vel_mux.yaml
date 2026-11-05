@@ -7,13 +7,13 @@ cmd_vel_mux:
     parking_topic: "/parking/cmd_vel"   # parking_controller — /parking/state 가 진행 중 (IDLE·WAIT·DONE 아님) 이면 이것 (라이다 안전 정지도 켬)
     parking_state_topic: "/parking/state"
     cmd_vel_topic: "/cmd_vel"
-    mission_states: ["M7_AVOID", "M8_AVOID"]   # 이 상태일 때는 mission_manager 가 직접 운전
+    mission_states: ["M7_AVOID", "M8_AVOID", "M2_SHIFT"]   # 이 상태일 때는 mission_manager 가 직접 운전
     stale_s: 0.3
     selected_topic: "/cmd_vel_mux/selected"   # /cmd_vel 마다 출처 (lane | mission | zero:…) — rosbag 확인용
     log_period_s: 2.0                   # 고른 입력·넘김/버림 수·입력 나이 요약 로그 주기, 0 = 안 냄
     stop_eps: 0.01                      # |v|, |w| 가 이보다 작으면 정지 명령 (시작·끝을 출처와 함께 로그)
     # 라이다 안전 정지 (뎁스·미션 판단과 별개, 마지막 단계에서): 차 앞 통로에 점이 있으면 전진을, 뒤에 있으면 후진을 0 으로
-    guard_states: ["M7_AVOID", "M8_AVOID"]     # 켜는 상태 ([] = 늘). 주차 중 (/parking/state 진행 중) 에도 켬
+    guard_states: ["M7_AVOID", "M8_AVOID", "M2_SHIFT"]     # 켜는 상태 ([] = 늘). 주차 중 (/parking/state 진행 중) 에도 켬
     scan_topic: "/scan"
     odom_topic: "/odom"
     laser_x: 0.103                      # base_link → 라이다 (sensor_mounts laser_link)

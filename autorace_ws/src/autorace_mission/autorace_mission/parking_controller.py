@@ -65,6 +65,9 @@ class ParkingController(Node):
         p('bay_d', 0.60)
         p('approach_speed', 0.10)
         p('wait_detect_m', 0.9)            # WAIT: 앞옆 (x 0.1~이만큼) 에 주차 LIMO 점이 보이면 APPROACH
+        p('wait_min_pts', 10)              # 주차 LIMO 로 볼 최소 라이다 점 수
+        p('wait_min_len_m', 0.15)          # 그 점들의 앞뒤 길이 (LIMO 옆면 0.32 m)
+        p('wait_confirm', 3)               # 이만큼 연속 스캔
         p('row_keep_k', 1.5)               # 주차 LIMO 줄과 옆 거리 유지 [rad/m] (방향 보정, ±row_keep_max_deg)
         p('row_keep_max_deg', 6.0)
         p('side_probe_dx', 0.04)           # 차 중심 옆 라이다 띠 (진행 방향 ±)
@@ -105,6 +108,7 @@ class ParkingController(Node):
         p('lane_state_topic', '/lane/state')
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.sgn = -1.0 if g('bay_side') == 'right' else 1.0
+        self._wait_hits = 0
         self.state = 'IDLE'
         self.pose = None                   # odom (x, y, yaw)
         self.speed = 0.0
@@ -351,9 +355,16 @@ class ParkingController(Node):
             pt = self.pts()
             if pt is not None:
                 x, y = pt
-                if ((x > 0.1) & (x < g('wait_detect_m')) & (self.sgn * y > 0.25) & (self.sgn * y < g('side_near_m'))).sum() >= 3:
+                sel = (x > 0.1) & (x < g('wait_detect_m')) & (self.sgn * y > 0.25) & (self.sgn * y < g('side_near_m'))
+                n = int(sel.sum())
+                ext = float(x[sel].max() - x[sel].min()) if n else 0.0
+                # LIMO 옆면 (길이 0.32 m) 만큼 길게 이어진 점들만 — 트랙 옆 표지판 받침대 (점 3 개) 를 주차 LIMO 로 보고
+                # 차선 추종을 놓아 코너에서 직진해 나간 일 (실차 11-05)
+                ok = n >= g('wait_min_pts') and ext >= g('wait_min_len_m')
+                self._wait_hits = self._wait_hits + 1 if ok else 0
+                if self._wait_hits >= g('wait_confirm'):
                     self.h0, self.start_xy, self.t0 = self.heading(), self.pose[:2], now
-                    self.set_state('APPROACH', '앞옆에 주차 LIMO')
+                    self.set_state('APPROACH', f'앞옆에 주차 LIMO (점 {n} 개, 앞뒤 {ext:.2f} m, {self._wait_hits} 번 연속)')
             return
         if s == 'APPROACH':
             self.do_approach(now)

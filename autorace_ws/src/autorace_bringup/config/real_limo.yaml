@@ -26,3 +26,6 @@ mission_manager:
   ros__parameters:
     m7_cam_hfov_deg: 66.5
     m7_cam_yaw_deg: 0.26
+cmd_vel_mux:
+  ros__parameters:
+    stale_s: 0.5                        # 실차 차선 노드가 YOLO 와 같이 돌아 초당 7~18 장 → 0.3 s 끊김이 잦아 멈칫 (11-05). 0.5 s

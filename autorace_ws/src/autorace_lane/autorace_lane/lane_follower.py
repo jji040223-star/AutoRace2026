@@ -3,7 +3,7 @@
   sub  image_topic   (기본 /camera/color/image_raw, sensor_msgs/Image rgb8|bgr8)  — 실차 Orbbec Dabai / autorace_sim 같은 이름
   pub  cmd_vel_topic (기본 /cmd_vel, geometry_msgs/Twist)                          — 실차 limo_base / autorace_sim 이 구독
   pub  debug_topic   (기본 /lane/debug, sensor_msgs/Image bgr8, debug_hz 로 제한)    — 왼쪽 BEV + 상자·피팅, 오른쪽 마스크
-  sub  lane_cmd_topic (기본 /mission/lane_cmd, autorace_msgs/LaneCmd)               — mission_manager 지시. 지금은 max_speed·stop 만
+  sub  lane_cmd_topic (기본 /mission/lane_cmd, autorace_msgs/LaneCmd)               — mission_manager 지시: max_speed·stop·reset_window·follow (M2 갈림길: 한 선만)
                       (속도 상한은 speed_ramp 로 서서히, stop 은 바로. lane_cmd_timeout_s 동안 안 오면 둘 다 해제)
   pub  state_topic    (기본 /lane/state, autorace_msgs/LaneState)                   — 영상마다: 중심 오차, 차로 폭 (지그재그), 정지선 거리
 
@@ -151,6 +151,8 @@ class LaneFollower(Node):
     def on_lane_cmd(self, msg):
         self._cap_target = float(msg.max_speed) if msg.max_speed > 0 else None
         self._stop = bool(msg.stop)
+        if self.det is not None:
+            self.det.follow = msg.follow if msg.follow in ('left', 'right') else 'both'   # M2 갈림길: 한쪽 선만
         if msg.reset_window and not self._reset_prev and self.det is not None:
             # 차선을 떠났다 돌아올 때 (M7 회피 뒤 등): 직전 피팅·중심을 버리고 새로 찾는다 (v3: 윈도우 리셋)
             self.det.reset(center_hint=0.5)    # 미션이 차를 차로 가운데쯤에 두고 넘김 (M7 변경 끝·M8 통로 끝)

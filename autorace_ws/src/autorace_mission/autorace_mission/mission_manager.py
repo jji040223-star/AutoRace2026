@@ -120,6 +120,12 @@ class MissionManager(Node):
         p('m6_speed', 0.15)
         p('m6_release_m', 0.3)
         # M3 보행자 표지판 정지
+        p('m4_require_sign', True)         # 주차 표지판 (P) 을 본 뒤에만 주차 모드 (순서 조건만으로 켜면 주차 구역이 아닌 곳에서
+                                           #   트랙 옆 물체를 주차 LIMO 로 보고 차선 추종을 놓았다 — 실차 11-05)
+        p('m4_labels', ['parking'])
+        p('m4_min_conf', 0.5)
+        p('m4_min_box_px', 20)
+        p('m4_confirm_frames', 3)
         p('m3_labels', ['crosswalk'])      # 모델 클래스 이름 (보행자 표지판 = crosswalk)
         p('m3_min_conf', 0.5)
         p('m3_min_box_px', 30)
@@ -261,6 +267,14 @@ class MissionManager(Node):
         p('m2_min_conf', 0.5)
         p('m2_min_box_px', 12)
         p('m2_confirm_frames', 3)
+        p('m2_without_m7', True)           # M7 을 건너뛰어도 (정적 장애물 없음) 3차선에서 표지판 쪽 바깥 차로로 옮겨 갈림길을 따른다
+        p('m2_zone_frames', 10)            # 노란 선이 한쪽만 보이는 프레임이 이만큼 연속 → 3차선 구간 (차로 번호: 왼쪽 선 = 맨 왼쪽 차로)
+        p('m2_shift_speed', 0.2)           # 차로 옮길 때 속도 [m/s]
+        p('m2_shift_look_m', 0.5)          # pure pursuit 앞 거리
+        p('m2_shift_tol_m', 0.04)          # 목표 차로 중심과 이만큼 안 + 방향 5° 안이면 옮기기 끝
+        p('m2_shift_max_m', 3.0)           # 이만큼 가도 못 옮기면 포기 (차선 추종으로 돌아감)
+        p('m2_hold_m', 2.5)                # 잠금 (분기점 가까움) 뒤 이만큼 갈 때까지 표지판 쪽 선만 따라감 → 갈림길 지남
+        p('m2_hold_max_m', 6.0)            # 잠금을 못 해도 선 고정 시작 뒤 이만큼이면 끝
         p('m2_lock_box_px', 45)            # 이 크기 이상 (표지판 약 1.2 m 앞 = 분기점 가까이) 으로 같은 결과를 확인하면 잠금 — 더 안 바뀜
         # 연습 모드: 시설물이 없는 미션을 건너뜀 (예: ["M7", "M8", "M1"]). 건너뛴 미션은 다음 미션의 순서 조건에서 '지난 것' 으로 치고,
         # M4 주차는 남은 미션 중 마지막 (M3 → M7 → M8 → M1 순) 이 끝나면 시작한다 (다 건너뛰면 출발하자마자 주차 구역을 기다림).
@@ -275,7 +289,7 @@ class MissionManager(Node):
         self._pos = None                   # 지금 오도메트리 (x, y)
         self._speed = 0.0
         self._odom_hist = collections.deque(maxlen=400)   # (시각, x, y) — 영상 시각의 위치를 찾는다
-        self._hits = {'m5': 0, 'm3': 0}
+        self._hits = {'m5': 0, 'm3': 0, 'm4': 0}
         self._resid_hits = 0
         self._m5_seen = self._m5_start = None
         self._m6_last_zig = self._m6_start = None
@@ -290,9 +304,12 @@ class MissionManager(Node):
         self._m7_done = False
         self._m1, self._m1_hits, self._m1_done = {}, 0, False
         self._m3_done = False
-        self._m4_started = False           # /parking/start 를 보냄
+        self._m4_started = False           # /parking/start 를 보냄 (또는 표지판 기다림)
+        self._m4_pending = None            # 순서는 됐고 주차 표지판을 기다리는 중 (이유)
+        self._m4_sign = False              # 갈림길 뒤에 주차 표지판을 봄
         self._light = None                 # 마지막 /perception/traffic_light
         self._lane = None                  # 마지막 /lane/state
+        self._m2z = {'single': 0, 'side_obs': 0, 'zone': None, 'shift': None, 'hold': None, 'both': 0}   # M7 없이 M2 (m2_without_m7)
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
         self._obs = []                     # 장애물 기억 (오도메트리 좌표): {'quads': 관측별 꼭짓점 4 개, 'c': 중심, 'seen': 시각}
         self._m7_hits = 0
@@ -320,13 +337,13 @@ class MissionManager(Node):
                                + (f", 건너뜀 {sorted(self.skip)} (연습 모드)" if self.skip else ''))
 
     # ---------------------------------------------------------------- 공통
-    ORDER = ('M3', 'M7', 'M2', 'M8', 'M1')   # 순서 조건이 걸린 미션 (M2 는 M7 안에서 — M7 을 건너뛰면 같이 건너뜀)
+    ORDER = ('M3', 'M7', 'M2', 'M8', 'M1')   # 순서 조건이 걸린 미션 (M2 는 M7 안에서. M7 을 건너뛰면 m2_without_m7 로 따로)
 
     def done_or_skipped(self, key):
         """미션이 끝났는지 — 다음 미션의 순서 조건용. 건너뛴 미션은 '자기 앞 미션이 끝났을 때' 지난 것으로 친다
         (건너뛴 미션 때문에 앞쪽 순서 조건이 통째로 사라지지 않게: M8 을 건너뛰어도 M1 은 M2 를 지난 뒤에만)."""
         i = self.ORDER.index(key)
-        if key in self.skip or (key == 'M2' and 'M7' in self.skip):
+        if key in self.skip or (key == 'M2' and 'M7' in self.skip and not self.get_parameter('m2_without_m7').value):
             return True if i == 0 else self.done_or_skipped(self.ORDER[i - 1])
         return {'M3': self._m3_done, 'M7': self._m7_done, 'M2': self._m2['done'], 'M8': self._m8_done, 'M1': self._m1_done}[key]
 
@@ -336,6 +353,11 @@ class MissionManager(Node):
 
     def start_parking(self, why):
         self._m4_started = True
+        if self.get_parameter('m4_require_sign').value and not self._m4_sign:
+            self._m4_pending = why
+            self.set_state('LANE', f'{why} → 주차 표지판을 볼 때까지 차선 추종')
+            return
+        self._m4_pending = None
         self.parking_pub.publish(Empty())
         self.set_state('M4_PARKING', f'{why} → /parking/start (parking_controller 가 주차 구역에서 넘겨받음)')
 
@@ -367,7 +389,7 @@ class MissionManager(Node):
         """시뮬 리셋 (오도메트리가 출발 자세로 튐) 등 — 미션 상태·기억을 처음으로."""
         self.get_logger().info(f'[상태] {self.state} → LANE (처음으로: {why})')
         self.state = 'LANE'
-        self._hits = {'m5': 0, 'm3': 0}
+        self._hits = {'m5': 0, 'm3': 0, 'm4': 0}
         self._resid_hits = self._m7_hits = 0
         self._m3, self._m7, self._obs = {}, {}, []
         self._m2 = {'side': None, 'cand': None, 'n': 0, 'done': False, 'locked': False}
@@ -378,6 +400,7 @@ class MissionManager(Node):
         self._m1, self._m1_hits, self._m1_done = {}, 0, False
         self._m3_done = False
         self._m4_started = False
+        self._m4_pending, self._m4_sign = None, False
         self._light = None                 # 마지막 /perception/traffic_light
 
     def on_odom(self, msg):
@@ -406,6 +429,14 @@ class MissionManager(Node):
         self.m2_update(msg)
         m3 = [d for d in self.hits(msg, 'm3') if d.y2 - d.y1 <= g('m3_max_box_px')]
         m5 = self.hits(msg, 'm5')
+        m4 = self.hits(msg, 'm4')
+        if m4 and self._hits['m4'] >= g('m4_confirm_frames') and not self._m4_sign and self.done_or_skipped('M2'):
+            best = max(m4, key=lambda d: d.confidence)
+            self._m4_sign = True
+            self.get_logger().info(f'[M4] 주차 표지판 ({best.label} {best.confidence:.2f}, 박스 높이 {best.y2 - best.y1}px, '
+                                   f'{self._hits["m4"]} 장 연속, odom {self.fmt(self._pos)})')
+            if self._m4_pending:
+                self.start_parking(self._m4_pending + ' + 주차 표지판')
         if self._m2['done'] or self._m8_done:
             return                         # 순서 힌트: 갈림길 (·라바콘) 뒤에는 서행·보행자 표지판 미션이 없다
         cooling = (self._m3_cooldown_from is not None
@@ -450,6 +481,7 @@ class MissionManager(Node):
                                    + (f' (전에 본 {old} 에서 바뀜 — 마지막 것을 따름)' if old else ''))
         if m['side'] == side and m['n'] >= g('m2_confirm_frames') and best.y2 - best.y1 >= g('m2_lock_box_px'):
             m['locked'] = True
+            m['lock_pos'] = self._pos
             self.get_logger().info(f'[M2] 분기점 가까움 (표지판 박스 {best.y2 - best.y1}px ≥ {g("m2_lock_box_px")}px) → {side} 로 잠금, '
                                    f'odom {self.fmt(self._pos)}')
 
@@ -479,6 +511,7 @@ class MissionManager(Node):
             self.set_state('M6_SLOW', f'선 피팅 잔차 {msg.line_resid_px:.1f}px, {self._resid_hits} 장 연속, odom {self.fmt(self._pos)}')
         if self.state == 'M7_AVOID' and g('m7_line_fix'):
             self.m7_line_fix(msg)
+        self.m2_zone_update(msg)
         # 정지선 거리 (M3·M1 공통)
         if self.state == 'M3_APPROACH':
             self.line_update(self._m3, msg, 'M3', '표지판')
@@ -660,9 +693,9 @@ class MissionManager(Node):
                 keep.append(ob)
         self._obs = keep
 
-    def m7_enter(self):
+    def lane_axis(self):
+        """차로 방향: 최근 (yaw + 차선 방향) 중앙값 → m7_axis_snap_deg 단위로 (트랙 직선은 출발 방향과 평행·직각)."""
         g = lambda k: self.get_parameter(k).value   # noqa: E731
-        # 차로 방향: 최근 (yaw + 차선 방향) 중앙값 → m7_axis_snap_deg 단위로
         recent = list(self._lane_dirs)[-int(g('m7_axis_frames')):]
         if recent:
             c = sum(math.cos(a) for a in recent)
@@ -671,7 +704,12 @@ class MissionManager(Node):
         else:
             est, how = self._yaw, '지금 yaw'
         snap = math.radians(g('m7_axis_snap_deg'))
-        axis = round(est / snap) * snap if snap > 0 else est
+        return (round(est / snap) * snap if snap > 0 else est), est, how
+
+    def m7_enter(self):
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        # 차로 방향: 최근 (yaw + 차선 방향) 중앙값 → m7_axis_snap_deg 단위로
+        axis, est, how = self.lane_axis()
         side = self._lane.yellow_side if self._lane is not None else 0
         now = self.get_clock().now().nanoseconds * 1e-9
         self._m7 = {'origin': self._pos, 'axis': axis, 'side': side, 'n': None, 'changes': 0, 'mode': None,
@@ -1069,6 +1107,91 @@ class MissionManager(Node):
         else:
             self.get_logger().warn(f'[M2] 표지판 {side} 인데 {road} 길로 들어감 (차로 {k}) — 갈림길 쪽 차로로 옮기지 못함')
         self._m2['done'] = True
+
+    # ---------------------------------------------------------------- M2 갈림길 — M7 없이 (m2_without_m7)
+    def m2_alone(self):
+        """M7 을 건너뛴 연습 (정적 장애물 없음) 에서 M2 를 따로 할 때인지."""
+        return ('M7' in self.skip and self.get_parameter('m2_without_m7').value and not self._m2['done']
+                and self.done_or_skipped('M3') and self._pos is not None)
+
+    def m2_zone_update(self, msg):
+        """3차선 구간 알아차리기 (노란 선이 한쪽만 m2_zone_frames 연속) + 표지판 없이 지나간 경우 마무리."""
+        if not self.m2_alone():
+            return
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        z = self._m2z
+        ys = msg.yellow_side if msg.found else 0
+        if ys in (-1, 1):
+            z['single'] += 1
+            z['side_obs'] = ys
+        else:
+            z['single'] = 0
+        if z['zone'] is None and z['single'] >= g('m2_zone_frames') and self.state == 'LANE':
+            z['zone'] = self._pos
+            self.get_logger().info(f'[M2] 3차선 구간 (노란 선 {"왼쪽" if ys < 0 else "오른쪽"}만 {z["single"]} 장 연속) — 지금 '
+                                   f'{"맨 왼쪽" if ys < 0 else "맨 오른쪽"} 차로, 표지판 {self._m2["side"] or "아직 못 봄"}, '
+                                   f'odom {self.fmt(self._pos)}')
+        z['both'] = z['both'] + 1 if (z['zone'] is not None and ys == 2) else 0
+        if (z['zone'] is not None and z['shift'] is None and z['hold'] is None and z['both'] >= 15
+                and self.dist_from(z['zone']) > 3.0):
+            k = 0 if z['side_obs'] < 0 else g('m7_lanes') - 1
+            self.m2_commit(k)              # 표지판을 끝내 못 봄 — 들어간 길만 기록
+
+    def m2_tick(self, now, cmd):
+        """LANE·M2_SHIFT 에서 매 주기: 표지판 쪽 바깥 차로로 옮기기 → 그쪽 선만 따라가기 → 갈림길 지나면 끝."""
+        if not self.m2_alone():
+            return
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        z, m = self._m2z, self._m2
+        last = g('m7_lanes') - 1
+        if self.state == 'LANE' and z['zone'] is not None and z['shift'] is None and z['hold'] is None and m['side']:
+            cur = 0 if z['side_obs'] < 0 else last
+            tgt = 0 if m['side'] == 'A' else last
+            if cur == tgt:
+                z['hold'] = {'from': self._pos, 'side': m['side']}
+                self.get_logger().info(f'[M2] 표지판 {m["side"]} — 이미 {"맨 왼쪽" if tgt == 0 else "맨 오른쪽"} 차로, '
+                                       f'갈림길까지 {"왼쪽" if tgt == 0 else "오른쪽"} 선만 따라감')
+            else:
+                axis, est, how = self.lane_axis()
+                dl = (cur - tgt) * g('m7_lane_width_m')       # + = 왼쪽 (차로 번호는 왼쪽이 0)
+                z['shift'] = {'origin': self._pos, 'axis': axis, 'dl': dl, 'side': m['side']}
+                self.set_state('M2_SHIFT', f'표지판 {m["side"]} → 차로 {cur} 에서 {tgt} 로 {abs(dl):.2f} m '
+                                           f'{"왼쪽" if dl > 0 else "오른쪽"}, 차로 방향 {math.degrees(axis):.0f}° '
+                                           f'(추정 {math.degrees(est):.1f}°, {how}), odom {self.fmt(self._pos)}')
+        if self.state == 'M2_SHIFT':
+            sh = z['shift']
+            c, sn = math.cos(sh['axis']), math.sin(sh['axis'])
+            dx, dy = self._pos[0] - sh['origin'][0], self._pos[1] - sh['origin'][1]
+            sc, lc = dx * c + dy * sn, -dx * sn + dy * c
+            psi = wrap(self._yaw - sh['axis'])
+            err = sh['dl'] - lc
+            if abs(err) < g('m2_shift_tol_m') and abs(psi) < math.radians(5.0):
+                self.m7_publish(0.0, 0.0)
+                z['hold'] = {'from': self._pos, 'side': sh['side']}
+                self._reset_until = now + 0.5
+                self.set_state('LANE', f'차로 옮기기 끝 ({sc:.2f} m 가서 옆 {lc:+.2f} m), '
+                                       f'갈림길까지 {"왼쪽" if sh["side"] == "A" else "오른쪽"} 선만 따라감 → 슬라이딩 윈도우 리셋')
+                return
+            if sc > g('m2_shift_max_m'):
+                self.m7_publish(0.0, 0.0)
+                z['hold'] = {'from': self._pos, 'side': sh['side']}
+                self._reset_until = now + 0.5
+                self.get_logger().warn(f'[M2] {sc:.2f} m 가도 차로를 못 옮김 (옆 {lc:+.2f} / 목표 {sh["dl"]:+.2f} m) — 포기')
+                self.set_state('LANE', '차로 옮기기 포기 → 차선 추종')
+                return
+            L = g('m2_shift_look_m')
+            v = g('m2_shift_speed')
+            alpha = wrap(math.atan2(err, L) - psi)
+            w = max(-1.0, min(1.0, 2.0 * v * math.sin(alpha) / L))
+            self.m7_publish(v, w)
+            return
+        if z['hold'] is not None and self.state in ('LANE',) + SLOW_STATES:
+            h = z['hold']
+            cmd.follow = 'left' if h['side'] == 'A' else 'right'
+            lock = m.get('lock_pos')
+            if (lock is not None and self.dist_from(lock) > g('m2_hold_m')) or self.dist_from(h['from']) > g('m2_hold_max_m'):
+                k = 0 if h['side'] == 'A' else last
+                self.m2_commit(k)
 
     # ---------------------------------------------------------------- M8 라바콘 (Follow-the-Gap, 라이다)
     def on_cones(self, msg):
@@ -1475,7 +1598,9 @@ class MissionManager(Node):
                 self._m3_cooldown_from = self._pos
                 self._m3_done = True
                 self.set_state('LANE', f'정지선 통과 {g("m3_exit_m")} m, 이후 {g("m3_cooldown_m")} m 동안 보행자 표지판 무시')
-        if s == 'LANE' and not self._m4_started and self.m4_ready():
+        if self.state in ('LANE', 'M2_SHIFT') + SLOW_STATES:
+            self.m2_tick(now, cmd)
+        if self.state == 'LANE' and not self._m4_started and self.m4_ready():
             self.start_parking(f'연습 모드 — 건너뛴 {sorted(self.skip)} 앞의 미션까지 끝')
         if self.state in ('LANE', 'M4_PARKING') and now < self._m8_slow_until:
             cmd.max_speed = float(g('m8_exit_speed'))     # 라바콘 뒤 차선을 다시 잡는 동안 천천히

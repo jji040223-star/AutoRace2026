@@ -113,6 +113,7 @@ class SlidingWindowLaneDetector:
         self.sw_side_default = sw_side_default    # 단선 분류 폴백 (-1 = 우측 경계)
         # LIMO 추가: 단선 중심을 선의 법선 방향 (바닥 m 기준) 으로 반 차폭 떨어진 곳으로. False = 원본 (BEV 가로로 반 차폭)
         self.sw_single_normal = sw_single_normal
+        self.follow = 'both'          # 'left' | 'right' — 선 하나만 보일 때 그쪽 선을 그쪽 경계로 (M2 갈림길: 3차선 바깥 차로)
         self._prev_pair_mid = None                # 직전 프레임에서 고른 경계 쌍의 아래 가운데 x (쌍 고르기 연속성)
         # LIMO 추가 — 정지선 검출 (M3·M1). 차선용 use_white 와 따로, 흰색 마스크(노랑 뺌)에서 차로 폭을 가로지르는 줄을 찾는다
         self.stop_line_enabled = stop_line_enabled
@@ -530,7 +531,11 @@ class SlidingWindowLaneDetector:
         else:
             best = min(fits, key=lambda f: f['resid'])
             # 단선: 직전 중심에 가까운 해석 (좌측 경계면 중심 = 선 + 반차폭), 없으면 기본값
-            if self._prev_center is not None:
+            if self.follow in ('left', 'right'):
+                # M2 갈림길: 지정한 쪽의 가장 바깥 선을 그쪽 경계로 (가운데 흰 점선·분리대 쪽 선에 끌려가지 않게)
+                best = min(fits, key=lambda f: f['x_bot']) if self.follow == 'left' else max(fits, key=lambda f: f['x_bot'])
+                side = 1.0 if self.follow == 'left' else -1.0
+            elif self._prev_center is not None:
                 cand_l, cand_r = best['x_bot'] + half, best['x_bot'] - half
                 side = 1.0 if abs(cand_l - self._prev_center) <= abs(cand_r - self._prev_center) else -1.0
             else:
