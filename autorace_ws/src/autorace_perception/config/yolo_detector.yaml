@@ -1,0 +1,20 @@
+# YOLO 표지판 검출 (autorace_perception/yolo_detector.py). 실차·시뮬 공통.
+yolo_detector:
+  ros__parameters:
+    model_path: ""                      # 비우면 이 패키지 models/autorace_yolov8n.pt
+    image_topic: "/camera/color/image_raw"
+    detections_topic: "/perception/detections"
+    debug_topic: "/perception/debug"    # rqt_image_view 로 보기 (박스·라벨·박스 높이 px)
+    debug_hz: 5.0
+    conf: 0.5
+    imgsz: 640                          # 학습 크기
+    device: ""                          # "" = CUDA 있으면 GPU, 없으면 cpu
+    max_hz: 10.0                        # 실차 젯슨에서는 낮춘다 (NCNN 변환 전)
+    # M2 갈림길 표지판 보조 (yolo_detector.py 설명): 시뮬 렌더 A/B 표지판은 YOLO 가 못 잡는다 → 파란 원 + A/B 그림 상관
+    branch_assist: true
+    branch_labels: ["turn_a", "turn_b"]
+    branch_templates: [""]              # 비우면 models/sign_branch_A.png, sign_branch_B.png (실제 대회 표지판이 다르면 그림을 바꿈)
+    branch_min_px: 12                   # 시뮬: 4 m 앞 표지판 지름 14 px
+    branch_min_score: 0.6               # 시뮬: 맞는 쪽 0.6–0.95, 반대쪽 ≤ 0.47, 주차 표지판 ≤ 0.46
+    branch_min_margin: 0.25
+    branch_check_yolo: true             # YOLO turn 박스 안에 파란 원이 없으면 버림 (정차 LIMO 바퀴를 turn_a 로 잡았다)

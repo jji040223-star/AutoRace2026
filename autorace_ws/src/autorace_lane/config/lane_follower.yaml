@@ -1,0 +1,57 @@
+# 슬라이딩 윈도우 차선 추종 (autorace_lane/lane_follower.py). 실차·시뮬 공통.
+# 검출 파라미터 이름·기본값은 원본 SEAME D-Racer-Kit lane_node.py 와 같다 — 여기 적은 것만 AutoRace 트랙 / LIMO Pro 에 맞춰 바꾼 값.
+lane_follower:
+  ros__parameters:
+    image_topic: "/camera/color/image_raw"
+    cmd_vel_topic: "/cmd_vel"
+    debug_topic: "/lane/debug"          # rqt_image_view 로 보기. 왼쪽 BEV + 상자(보라)·피팅(주황)·중심(빨강), 오른쪽 마스크
+    debug_hz: 5.0
+    enable: true                        # false = 인식만 (바퀴 안 움직임) — 실차 첫 확인용
+
+    # 카메라 → BEV. birdeye_src_ratio 를 [0.0] 으로 두면 아래 기하로 계산해 시작할 때 로그로 찍는다.
+    # 실차는 카메라 높이·기울기를 재서 넣거나, 계산된 8 개 값을 그림 보며 고쳐 birdeye_src_ratio 에 직접 넣는다.
+    # 원본은 320 폭 + dst 0.2–0.8 (BEV 좌우 ±0.43 m). 여기서는 480 폭 + dst 0.3–0.7 — 차로 폭은 똑같이 192 px
+    # (원본 픽셀 파라미터 그대로) 이고 좌우 시야만 ±0.65 m 로 넓다 (3차선 구간·차로가 넓어지는 코너에서 경계선이 안 빠지게).
+    process_width: 480
+    birdeye_src_ratio: [0.0]
+    birdeye_dst_ratio: [0.3, 0.0, 0.7, 0.0, 0.7, 1.0, 0.3, 1.0]
+    camera_hfov_deg: 71.0               # Orbbec Dabai 컬러
+    camera_height: 0.175                # 바닥 → 카메라 [m]
+    camera_pitch_deg: 0.0               # 아래로 +
+    bev_near_m: 0.37                    # 차로 양 끝(±0.26 m)이 화면에 드는 가장 가까운 거리 (화각 71°)
+    bev_far_m: 0.75                     # 멀리 볼수록 코너 안쪽을 파고든다 (1.0 m 이면 R≈0.85 코너에서 안쪽 선을 밟음)
+    bev_half_width_m: 0.26              # 차로 반폭 → BEV 차로 폭 192 px = lane_width_init
+    lane_width_tol: 0.25                # 차로 폭 학습 허용 범위 192 × (1 ± 0.25) = 144–240 px. 원본(0)은 하한 96 px 만 있어
+                                        # 방지턱에서 흔들린 뒤 폭 ~100 px 선 쌍을 배워 차로 사이로 달린 적 있음 (2026-10-31)
+
+    # 색: AutoRace 경계선 노랑 (#e5aa43 = OpenCV H≈19), 흰 노면표시(정지선·횡단보도·글자)는 기본으로 뺀다
+    use_white: false
+    use_yellow: true
+    yellow_hsv_lo: [15, 45, 130]        # Isaac 렌더에서 잰 값: 노란 선 H 18–26, S 40–120, V 120–255 / 매트 S < 40, V < 130
+    yellow_hsv_hi: [35, 255, 255]
+    white_hsv_lo: [0, 0, 180]
+    white_hsv_hi: [179, 60, 255]
+
+    # 제어 (kp/ki/kd = 원본 decision_node)
+    kp: 0.6
+    ki: 0.0
+    kd: 0.15
+    angular_scale: 3.0                  # PID 1 → linear_speed 에서의 각속도 [rad/s] (감속하면 같이 줄어 곡률 유지)
+    max_angular: 1.5
+    linear_speed: 0.3                   # 규정집 권고 0.3~0.4 m/s
+    slow_speed: 0.2                     # 감속 하한·차선 소실 중 속도 (규정집 서행 0.2 이하)
+    curve_slow: 0.5
+    curve_steer_bias: 0.25              # 곡률 feed-forward (원본 기본 0). 0 이면 코너 입구에서 덜 꺾어 바깥으로 밀린다 (왼쪽 위 코너 11.5 → 6.7 cm).
+                                        # 0.5 는 길이 넓어지며 꺾이는 곳 (A·B 합류 코너, 3 차선 진입 코너) 에서 일찍 꺾어 안쪽 선을 밟았다 —
+                                        # 조향 기준점이 차 앞 0.4 m 이상이라 차체가 안쪽 선에 8 cm 까지 붙어도 '가운데' 로 봄 (2D 시뮬 한 바퀴 3 번:
+                                        # 0.5 → 두 코너 0 cm 밟음, 0.25 → 합류 5.1–5.9, 3 차선 2.8–3.8, 왼쪽 위 8.0–8.2 cm, 0 → 3 번 중 1 번 밟음)
+    lost_stop_s: 20.0                   # 차선을 이만큼 못 찾으면 정지 (원본은 안 멈춤). 3차선 가운데 차로는 흰 점선뿐이라
+                                        # 노란 선이 안 보이는 4 m 를 직전 조향 유지로 지나야 한다 (0.2 m/s 로 ~20 s)
+    image_timeout_s: 0.5
+    lane_cmd_topic: "/mission/lane_cmd" # mission_manager 지시 (속도 상한·정지). mission_manager 를 안 띄우면 기존과 같음
+    state_topic: "/lane/state"          # 중심 오차·차로 폭·정지선 거리 → mission_manager
+    stop_line_enabled: true             # 정지선 검출 (흰색, 차선용 use_white 와 별개)
+    stop_line_min_cov: 0.9              # 차로 가운데 0.9 폭 중 흰 픽셀 비율. 시뮬: 정지선·횡단보도 가로선 0.98–1.0, '천천히' 글자 0.74, 정차 LIMO 0.8
+    stop_line_min_rows: 10              # 임시값. 줄 두께 [BEV 행] (정지선 40 mm ≈ 25, 횡단보도 가로선 30 mm ≈ 18)
+    lane_cmd_timeout_s: 1.0
+    speed_ramp: 0.5                     # 속도 상한 변화 [m/s²]

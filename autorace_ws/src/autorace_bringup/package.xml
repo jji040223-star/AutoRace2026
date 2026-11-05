@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>autorace_bringup</name>
+  <version>0.1.0</version>
+  <description>AutoRace LIMO 실행 진입점: mode:=sim|real launch 와 params_sim/params_real</description>
+  <maintainer email="dkkim528@kookmin.ac.kr">kb4</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>tf2_ros</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>autorace_sim</exec_depend>
+  <exec_depend>autorace_track</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

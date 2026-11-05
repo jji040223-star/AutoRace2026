@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autorace_sim.fake_traffic_light import main
+
+main()

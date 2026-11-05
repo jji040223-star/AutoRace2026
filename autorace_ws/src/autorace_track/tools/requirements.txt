@@ -1,0 +1,7 @@
+# 트랙 빌드 도구용 (Isaac Sim 밖, 일반 venv): python3 -m venv ~/venvs/autorace && ~/venvs/autorace/bin/pip install -r requirements.txt
+ezdxf>=1.4
+shapely>=2.1          # constrained_delaunay_triangles
+matplotlib>=3.8
+numpy
+pyyaml
+usd-core==24.5        # Isaac Sim 5.1 내장 USD(24.x)와 맞춤

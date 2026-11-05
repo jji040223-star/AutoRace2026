@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autorace_perception.lidar_processor import main
+
+main()

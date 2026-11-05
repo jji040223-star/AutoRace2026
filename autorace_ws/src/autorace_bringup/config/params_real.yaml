@@ -1,0 +1,60 @@
+# mode:=real 설정 — 실차 LIMO 위에서 bringup.launch.py 가 읽는다. (이 PC 에서는 실차 드라이버 미설치라 미검증)
+#   real_drivers    → 어떤 드라이버를 띄울지 (설치 안 된 패키지는 건너뛰고 경고)
+#   sensor_mounts   → static_transform_publisher. params_sim.yaml 과 같은 값 유지
+#   limo_base_node / ydlidar_ros2_driver_node → 각 드라이버 노드 파라미터
+
+real_drivers:
+  ros__parameters:
+    limo_base: true                 # agilexrobotics/limo_ros2 limo_base: /cmd_vel, /odom, /imu, TF odom→base_link
+    lidar: true                     # ydlidar_ros2_driver: /scan
+    camera: true                    # Orbbec Dabai: /camera/color/*, /camera/depth/*
+    camera_launch_package: "astra_camera"
+    camera_launch_file: "dabai.launch.py"
+
+sensor_mounts:                      # base_link 기준 [m], [rad]
+  ros__parameters:
+    laser_link:                     # limo_base tf_pub 노드를 따로 띄운다면 publish_tf: false 로 (중복 방지)
+      xyz: [0.103, 0.0, -0.034]
+      rpy: [0.0, 0.0, 0.0]
+      publish_tf: true
+    camera_link:
+      xyz: [0.084, 0.0, 0.03]
+      rpy: [0.0, 0.0, 0.0]
+      publish_tf: true
+    imu_link:                       # limo_base 가 base_link→imu_link 를 직접 낸다
+      xyz: [0.0, 0.0, 0.0]
+      rpy: [0.0, 0.0, 0.0]
+      publish_tf: false
+
+limo_base_node:
+  ros__parameters:
+    port_name: "ttylimo"
+    odom_frame: "odom"
+    base_frame: "base_link"
+    control_rate: 50
+    pub_odom_tf: true
+    use_mcnamu: false
+
+ydlidar_ros2_driver_node:           # EAI X2L — 실차 limo_bringup/param/ydlidar.yaml 과 대조 필요
+  ros__parameters:
+    port: "/dev/ydlidar"
+    frame_id: "laser_link"
+    ignore_array: ""
+    baudrate: 115200
+    lidar_type: 1
+    device_type: 0
+    sample_rate: 3
+    abnormal_check_count: 4
+    fixed_resolution: true
+    reversion: false
+    inverted: true
+    auto_reconnect: true
+    isSingleChannel: true
+    intensity: false
+    support_motor_dtr: true
+    angle_max: 180.0
+    angle_min: -180.0
+    range_max: 8.0
+    range_min: 0.12
+    frequency: 8.0
+    invalid_range_is_inf: false

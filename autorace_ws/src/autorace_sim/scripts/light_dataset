@@ -1,0 +1,4 @@
+#!/usr/bin/env python3
+from autorace_sim.light_dataset import main
+
+main()

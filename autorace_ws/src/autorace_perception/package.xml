@@ -1,0 +1,22 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>autorace_perception</name>
+  <version>0.1.0</version>
+  <description>YOLO 표지판 검출 (github.com/mark2455/2026_Autorace 의 YOLOv8n 모델) → /perception/detections</description>
+  <maintainer email="dkkim528@kookmin.ac.kr">kb4</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <buildtool_depend>ament_cmake_python</buildtool_depend>
+  <exec_depend>rclpy</exec_depend>
+  <exec_depend>sensor_msgs</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>nav_msgs</exec_depend>
+  <exec_depend>autorace_msgs</exec_depend>
+  <exec_depend>visualization_msgs</exec_depend>
+  <exec_depend>python3-numpy</exec_depend>
+  <exec_depend>python3-opencv</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

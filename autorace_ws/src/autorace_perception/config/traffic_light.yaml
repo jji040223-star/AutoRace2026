@@ -1,0 +1,31 @@
+# 신호등 판단 (autorace_perception/traffic_light.py, M1). 박스는 YOLO traffic_light 1 클래스 — 시뮬은 autorace_sim fake_traffic_light
+traffic_light:
+  ros__parameters:
+    image_topic: "/camera/color/image_raw"
+    info_topic: "/camera/color/camera_info"
+    detections_topic: "/perception/traffic_light_detections"   # 실차 YOLO 에 traffic_light 클래스가 생기면 /perception/detections
+    lane_state_topic: "/lane/state"
+    odom_topic: "/odom"
+    light_topic: "/perception/traffic_light"
+    debug_topic: "/perception/traffic_light_debug"   # rqt_image_view: 고른 박스 초록, 버린 박스 빨강 + 이유
+    debug_hz: 2.0
+    light_label: "traffic_light"
+    color_labels: ["red_light", "yellow_light", "green_light"]   # YOLO 색 클래스 (models/traffic_light_yolov8n.pt, 시뮬 영상으로 학습). 색은 클래스, 세 칸 밝기로 교차 확인
+    body_h_m: 0.205                     # 규정집 사진 20.5 × 12 cm
+    aspect_min: 1.4                     # 세로:가로 (실물 1.7)
+    aspect_max: 2.1
+    contrast_min: 1.6                   # 가장 밝은 칸 ÷ 두 번째 칸 (한 칸만 켜짐)
+    transition_window_s: 3.0            # 대비가 낮을 때 (램프가 막 바뀌어 꺼진 칸이 아직 밝음 — 시뮬 렌더러 잔상): 이 동안 어두웠다가
+    transition_ratio: 2.0               #   이 배 넘게 밝아진 칸이 하나뿐이면 그 칸이 켜진 것
+    range_min: 0.4
+    range_max: 4.0
+    require_line: true                  # 정지선을 봐서 예상 거리가 있을 때만 색을 냄 (크기로 모니터를 거를 수 있을 때만)
+    size_tol: 0.25                      # 크기로 잰 거리와 예상 거리 차이 한도 (비율). 모니터에 그린 신호등 (16 cm) 은 0.78 배 → 걸러짐
+    light_beyond_m: 1.65                # 정지선 가까운 끝 → 신호등, 진행 방향 [m] (시뮬 실측. 대회 트랙에서 다시 잴 것)
+    light_lateral_m: -0.37              # 진행 방향 왼쪽 + [m]
+    line_match_m: 0.10
+    line_keep_m: 1.0                    # 정지선이 차 뒤로 이만큼 지나가면 잊음
+    line_turn_deg: 45.0                 # 정지선을 본 뒤 진행 방향이 이만큼 바뀌면 잊음 (다른 도로의 선)
+    cam_x: 0.084
+    track_radius_m: 0.35                # 크기까지 확인한 신호등 위치에서 이보다 먼 박스는 버림
+    track_min: 3

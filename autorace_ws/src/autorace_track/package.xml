@@ -1,0 +1,12 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>autorace_track</name>
+  <version>0.1.0</version>
+  <description>AutoRace 2026 트랙: 도면(DXF) → 분류 → Isaac Sim USD 와 그 도구</description>
+  <maintainer email="dkkim528@kookmin.ac.kr">kb4</maintainer>
+  <license>Apache-2.0</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>
