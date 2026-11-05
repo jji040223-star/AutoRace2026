@@ -4,7 +4,7 @@
   sub  /cmd_vel (Twist)
   pub  /camera/color/image_raw (rgb8), /camera/color/camera_info, /camera/depth/image_raw (16UC1 mm), /camera/depth/camera_info,
        /scan (LaserScan, laser_link), /odom (odom → base_link, 출발 자세 기준), /imu, /tf, /tf_static, /clock
-       /sim2d/pose (geometry_msgs/Pose2D, world 참값), /sim2d/status (std_msgs/String JSON, 1 Hz — 선까지 최소 거리·충돌)
+       /sim2d/pose (geometry_msgs/Pose2D, world 참값), /sim2d/status (std_msgs/String JSON, 1 Hz — 선까지 최소 거리 (전체·1 m 칸별)·충돌)
   srv  /sim/reset (std_srvs/Trigger), sub /sim/start_pose (Pose2D, 다음 리셋 한 번만) — reset_sim 과 같은 방식
 
 실차 오차 흉내 (기본은 모두 0 = 이상적인 차):
@@ -539,7 +539,8 @@ class Sim2D(Node):
 
     # ------------------------------------------------------------------ 기록
     def stats_reset(self):
-        self.stats = {'min_line_m': float('inf'), 'touch_s': 0.0, 'dist_m': 0.0, 'since': getattr(self, 'sim_t', 0.0)}
+        self.stats = {'min_line_m': float('inf'), 'touch_s': 0.0, 'dist_m': 0.0, 'since': getattr(self, 'sim_t', 0.0),
+                      'cells': {}}           # 1 m 칸 'x,y' → [그 칸에서 바퀴~노란 선 최소 거리, 선 밟은 시간]
         self.prev_xy = None
 
     def track_stats(self, dt):
@@ -555,6 +556,9 @@ class Sim2D(Node):
         touching = dmin < 0.02              # 바퀴 접지 반폭 (~2 cm) 안에 노란 선
         if touching:
             self.stats['touch_s'] += dt
+        cell = self.stats['cells'].setdefault(f'{int(self.x)},{int(self.y)}', [float('inf'), 0.0])
+        cell[0] = min(cell[0], dmin)
+        cell[1] += dt if touching else 0.0
         if touching != getattr(self, '_touching', False):
             self._touching = touching
             if touching:
@@ -571,6 +575,7 @@ class Sim2D(Node):
                  v=round(self.v, 3), w=round(self.w, 3), line_now_m=round(self.last_line, 3),
                  min_line_m=round(self.stats['min_line_m'], 3), touch_s=round(self.stats['touch_s'], 2),
                  dist_m=round(self.stats['dist_m'], 2), collisions=dict(self.hits), knocked=sorted(self.knocked),
+                 cells={k: [round(v[0], 3), round(v[1], 2)] for k, v in self.stats['cells'].items()},
                  light=self.light_color(), branch=self.branch,
                  odom_err_m=round(self.odom_error(), 3))
         self.pub_status.publish(String(data=json.dumps(d)))

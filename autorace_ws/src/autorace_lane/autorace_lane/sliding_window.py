@@ -487,17 +487,21 @@ class SlidingWindowLaneDetector:
             yc = min(max(y, f['y_lo']), f['y_hi'])   # (6) 외삽 금지: 스팬 클램프
             return a * yc * yc + b * yc + c
 
-        # (5) 코리도 해석: 차폭 간격 두 경계(pair) 우선 — 왼쪽부터 첫 유효 페어
+        # (5) 코리도 해석: 차폭 간격 두 경계(pair) 우선. 유효 페어 (간격 0.7–1.4 × 차폭) 중 간격이 차폭에 가장 가깝고,
+        # 직전 중심에 가까운 것. (원본은 '왼쪽부터 첫 유효 페어' — 옆에 나란한 다른 도로 선 (안쪽 위 도로 북쪽 24 cm 의
+        # 출발 도로 선) 이 보이면 두 도로에 걸친 74 cm (차폭 1.4 배 안) 쌍을 먼저 골라 차로 가운데에서 11 cm 벗어나 달렸다)
         fits.sort(key=lambda f: f['x_bot'])
-        pair = None
+        pair, best_cost = None, None
+        lw = 2.0 * half
         for i in range(len(fits) - 1):
             for j in range(i + 1, len(fits)):
                 sep = fits[j]['x_bot'] - fits[i]['x_bot']
-                if 0.7 * (2.0 * half) <= sep <= 1.4 * (2.0 * half):
-                    pair = (fits[i], fits[j])
-                    break
-            if pair:
-                break
+                if 0.7 * lw <= sep <= 1.4 * lw:
+                    cost = abs(sep - lw) / lw
+                    if self._prev_center is not None:
+                        cost += 0.5 * abs((fits[i]['x_bot'] + fits[j]['x_bot']) / 2.0 - self._prev_center) / lw
+                    if best_cost is None or cost < best_cost:
+                        pair, best_cost = (fits[i], fits[j]), cost
 
         bands = []
         if pair:

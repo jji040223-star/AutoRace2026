@@ -146,7 +146,7 @@ def main():
                min_line_m=s.get('min_line_m'), touch_s=s.get('touch_s'), collisions=s.get('collisions'), knocked=s.get('knocked'),
                mission_states=st['states'].get('mission', []), parking_states=st['states'].get('parking', []),
                parking_result=st['parking_result'], branch=s.get('branch'), final=dict(x=s.get('x'), y=s.get('y')),
-               odom_err_m=s.get('odom_err_m'), frames_saved=st['saved'])
+               odom_err_m=s.get('odom_err_m'), frames_saved=st['saved'], cells=s.get('cells', {}))
     if a.frames and path:
         save_path(a.frames, path, st['events'])
     print('SIM2D_RESULT ' + json.dumps(res, ensure_ascii=False), flush=True)
