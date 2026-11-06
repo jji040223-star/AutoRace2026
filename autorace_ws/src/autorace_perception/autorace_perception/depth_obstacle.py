@@ -108,7 +108,7 @@ class DepthObstacle(Node):
                 if np.count_nonzero(m) < g('min_points'):
                     continue
                 out.obstacles.append(Obstacle(x_near=float(x[m].min()), x_far=float(x[m].max()), y_left=float(y[m].max()),
-                                              y_right=float(y[m].min()), height=float(h[m].max()), points=int(np.count_nonzero(m))))
+                                              y_right=float(y[m].min()), height=float(h[m].max()), bottom=float(h[m].min()), points=int(np.count_nonzero(m))))
         out.obstacles.sort(key=lambda o: o.x_near)
         self.pub.publish(out)
         self.publish_markers(out)

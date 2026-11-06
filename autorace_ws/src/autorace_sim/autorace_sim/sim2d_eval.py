@@ -120,7 +120,7 @@ def main():
 
     def on_pose(m):
         if st['status'] is not None and st['t0'] is not None:
-            if not path or math.dist(path[-1][1:3], (m.x, m.y)) > 0.01:
+            if not path or math.dist(path[-1][1:3], (m.x, m.y)) > 0.005 or abs(math.remainder(m.theta - path[-1][3], math.tau)) > math.radians(1.0):
                 path.append((round(t_now() - st['t0'], 2), m.x, m.y, m.theta, st['mission'] or '', st['parking'] or ''))
     node.create_subscription(Pose2D, '/sim2d/pose', on_pose, 10)
     node.create_subscription(Image, '/camera/color/image_raw', lambda m: st.update(img=to_bgr(m)), qos_profile_sensor_data)

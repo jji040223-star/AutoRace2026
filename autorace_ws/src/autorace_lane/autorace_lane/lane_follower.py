@@ -89,6 +89,8 @@ class LaneFollower(Node):
         p('debug_topic', '/lane/debug')
         p('debug_hz', 5.0)                 # 0 = 디버그 영상 안 냄
         p('enable', True)                  # false = 인식만 하고 /cmd_vel 은 0 (튜닝용)
+        p('wait_mission', False)           # true = /mission/lane_cmd 를 처음 받을 때까지 출발 안 함 (drive.launch — 실차 Jetson 에서
+                                           #   미션 노드가 늦게 켜져 차가 먼저 출발, 출발선 옆 과속방지턱 표지판 (M5) 을 놓쳤다 11-05)
         p('process_width', 320)            # 원본 카메라 폭 (320×160). 원본 픽셀 파라미터가 이 폭 기준
         # BEV — birdeye_src_ratio 를 비우면 아래 카메라 기하로 계산
         p('birdeye_src_ratio', [0.0])
@@ -135,6 +137,7 @@ class LaneFollower(Node):
         self._reset_prev = False
         self._cap_target = None            # mission_manager 가 준 속도 상한 [m/s] (None = 없음)
         self._cap_stamp = None
+        self._waiting_logged = False
         self._cap = float(g('linear_speed'))   # 지금 적용 중인 상한 (speed_ramp 로 _cap_target 을 따라감)
         self.create_timer(0.05, self.watchdog)
         self._last_img = self._last_found = None
@@ -267,7 +270,10 @@ class LaneFollower(Node):
         # offset + = 차선 중심이 오른쪽 → 오른쪽으로 (각속도 −). 원본 steer_scale −1 과 같은 규약
         w = -g('angular_scale') * u * cmd.linear.x / max(1e-3, g('linear_speed'))
         cmd.angular.z = float(np.clip(w, -g('max_angular'), g('max_angular')))
-        if not g('enable'):
+        if not g('enable') or (g('wait_mission') and self._cap_stamp is None):
+            if g('enable') and not self._waiting_logged:
+                self._waiting_logged = True
+                self.get_logger().info('미션 노드 지시 (/mission/lane_cmd) 를 기다림 — 받으면 출발')
             cmd = Twist()
         self._last_cmd = cmd
         self.cmd_pub.publish(cmd)

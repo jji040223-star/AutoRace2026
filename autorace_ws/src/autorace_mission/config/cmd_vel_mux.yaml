@@ -13,7 +13,7 @@ cmd_vel_mux:
     log_period_s: 2.0                   # 고른 입력·넘김/버림 수·입력 나이 요약 로그 주기, 0 = 안 냄
     stop_eps: 0.01                      # |v|, |w| 가 이보다 작으면 정지 명령 (시작·끝을 출처와 함께 로그)
     # 라이다 안전 정지 (뎁스·미션 판단과 별개, 마지막 단계에서): 차 앞 통로에 점이 있으면 전진을, 뒤에 있으면 후진을 0 으로
-    guard_states: ["M7_AVOID", "M8_AVOID", "M2_SHIFT"]     # 켜는 상태 ([] = 늘). 주차 중 (/parking/state 진행 중) 에도 켬
+    guard_states: ["M7_AVOID", "M8_AVOID", "M2_SHIFT", "M4_PARKING"]   # 켜는 상태 ([] = 늘). 주차 중 (/parking/state 진행 중) 에도 켬. M4_PARKING: 주차 구역 기다리는 동안 (WAIT) 도 — 시뮬 11-06 에서 한 차로 안쪽으로 달리다 주차 LIMO 를 정면으로 박음
     scan_topic: "/scan"
     odom_topic: "/odom"
     laser_x: 0.103                      # base_link → 라이다 (sensor_mounts laser_link)

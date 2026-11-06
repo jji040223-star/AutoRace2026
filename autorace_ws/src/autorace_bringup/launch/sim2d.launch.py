@@ -21,8 +21,7 @@ from launch_ros.actions import Node
 def _nodes(context):
     params = [os.path.join(get_package_share_directory('autorace_bringup'), 'config', 'params_sim2d.yaml')]
     extra = LaunchConfiguration('sim_params').perform(context)
-    if extra:
-        params.append(extra)
+    params += [p for p in extra.split(',') if p]     # 쉼표로 여러 개 (뒤가 앞을 덮음)
     fake = LaunchConfiguration('fake_detections').perform(context).lower() == 'true'
     return [Node(package='autorace_sim', executable='sim2d', name='sim2d', output='screen',
                  parameters=params + [{'fake_detections': fake}])]

@@ -31,7 +31,7 @@ from launch_ros.actions import Node
 
 NODES = ['lane_follower', 'yolo_detector', 'traffic_light_yolo', 'depth_obstacle', 'lidar_processor', 'traffic_light', 'fake_traffic_light',
          'parking_controller',
-         'mission_manager', 'cmd_vel_mux']
+         'mission_manager', 'cmd_vel_mux', 'odom_imu']
 
 
 def share(pkg, *p):
@@ -42,8 +42,13 @@ def _actions(context):
     arg = lambda name: LaunchConfiguration(name).perform(context).lower() == 'true'   # noqa: E731
     sim = arg('use_sim_time')
     common = {'use_sim_time': sim}
+    odom_topic = LaunchConfiguration('odom_topic').perform(context)
     ov = LaunchConfiguration('params').perform(context)
-    OV = [ov] if ov else []        # 실차 보정값 등 — 모든 노드 기본 설정 위에 덮어씀 (노드 이름별 섹션)
+    OV = [p for p in ov.split(',') if p]        # 실차 보정값 등 — 모든 노드 기본 설정 위에 덮어씀 (노드 이름별 섹션)
+    odom = Node(package='autorace_mission', executable='odom_imu', name='odom_imu', output='screen', parameters=[common])
+    common = dict(common, odom_topic=odom_topic)   # 우리 노드는 휠 거리 + IMU 방향 오도메트리를 씀 (실차 휠 오도메트리는 회전을 23 % 적게 잼)
+    if odom_topic == '/odom_imu':
+        common['imu_topic'] = '/imu_unbiased'      # odom_imu 가 멈춰 있을 때 잰 자이로 치우침을 뺀 IMU (mission·parking 의 자이로 적분)
     yolo = Node(package='autorace_perception', executable='yolo_detector', name='yolo_detector', output='screen',
                 parameters=[share('autorace_perception', 'config', 'yolo_detector.yaml')] + OV + [common])
     depth = Node(package='autorace_perception', executable='depth_obstacle', name='depth_obstacle', output='screen',
@@ -71,7 +76,7 @@ def _actions(context):
                parameters=[share('autorace_mission', 'config', 'cmd_vel_mux.yaml')] + OV + [common])
     lane = Node(package='autorace_lane', executable='lane_follower', name='lane_follower', output='screen',
                 parameters=[share('autorace_lane', 'config', 'lane_follower.yaml')] + OV + [
-                            dict(common, enable=arg('enable'), cmd_vel_topic='/lane/cmd_vel')])
+                            dict(common, enable=arg('enable'), cmd_vel_topic='/lane/cmd_vel', wait_mission=True)])
     reset = Node(package='autorace_sim', executable='reset_sim', name='reset_sim', output='screen')
     check = Node(package='autorace_mission', executable='check_nodes', name='check_nodes', output='screen', arguments=NODES)
 
@@ -87,9 +92,9 @@ def _actions(context):
             # 2D 시뮬: 표지판·신호등 박스를 시뮬이 직접 낸다 (YOLO·fake_traffic_light 없음) → 바로 리셋·출발
             start = ([LogInfo(msg='[drive] 2D 시뮬 검출 → 출발선으로 리셋'), reset] if sim and arg('reset_sim')
                      else [LogInfo(msg='[drive] 2D 시뮬 검출 → 미션 매니저 + 차선 추종 출발'), mission, lane])
-            return [depth, lidar, light, mux, park] + start
+            return [odom, depth, lidar, light, mux, park] + start
         extra_nodes = ([light_yolo] if src == 'yolo' else []) + ([fake] if sim or src == 'fake' else [])
-        return [LogInfo(msg='[drive] YOLO 모델 올리는 중 … (몇 초)'), yolo, depth, lidar, light, mux, park] + extra_nodes
+        return [LogInfo(msg='[drive] YOLO 모델 올리는 중 … (몇 초)'), odom, yolo, depth, lidar, light, mux, park] + extra_nodes
 
     fired = {'ready': False}
 
@@ -130,7 +135,8 @@ def generate_launch_description():
         DeclareLaunchArgument('start_x', default_value='0.74', description='시뮬 출발 자세 (params_sim robot.start_*) — 가짜 검출용'),
         DeclareLaunchArgument('start_y', default_value='5.58'),
         DeclareLaunchArgument('start_yaw_deg', default_value='0.0'),
-        DeclareLaunchArgument('params', default_value='', description='모든 노드에 덮어쓸 yaml (실차: autorace_bringup/config/real_limo.yaml)'),
+        DeclareLaunchArgument('odom_topic', default_value='/odom_imu', description='우리 노드가 쓸 오도메트리 (/odom_imu = 휠 거리 + IMU 방향, /odom = 휠만)'),
+        DeclareLaunchArgument('params', default_value='', description='모든 노드에 덮어쓸 yaml, 쉼표로 여러 개 (실차: autorace_bringup/config/real_limo.yaml)'),
         DeclareLaunchArgument('mission_params', default_value='', description='mission_manager 설정을 덮어쓸 yaml (시험용)'),
         DeclareLaunchArgument('perception', default_value='yolo',
                               description='yolo (YOLO 노드) | sim2d (2D 시뮬이 표지판·신호등 박스를 직접 냄, YOLO 없이)'),

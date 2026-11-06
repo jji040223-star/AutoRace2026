@@ -17,6 +17,7 @@ mission_manager:
     m5_min_conf: 0.5
     m5_min_box_px: 20                   # 임시값. 박스 높이 [px] (640×480 영상 기준)
     m5_confirm_frames: 3
+    sign_window_frames: 5               # 표지판 (M3·M4·M5): 최근 이만큼 중 *_confirm_frames 장 잡히면 인정 (연속 아니어도 됨)
     m5_speed: 0.15                      # 규정집: 기본 속도(0.3)의 1/2, 0.2 m/s 이하
     m5_release_m: 1.5                   # 임시값. 표지판을 마지막으로 본 곳부터 [m]
     # M6 서행 유도선 (지그재그) — 톱니 모양 노란 선은 슬라이딩 윈도우 곡선 피팅 잔차가 커진다 (/lane/state line_resid_px)

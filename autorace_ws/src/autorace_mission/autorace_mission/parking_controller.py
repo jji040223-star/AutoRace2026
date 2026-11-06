@@ -82,6 +82,17 @@ class ParkingController(Node):
         p('rot_tol_deg', 1.5)
         p('rot_max_w', 0.8)
         p('rot_min_w', 0.2)
+        p('rot_aim_deg', 0.7)              # 회전 멈추는 목표 (예측 오차가 이 안이면 0 명령). 끝 인정은 rot_tol_in/out_deg
+        p('rot_tol_in_deg', 2.5)           # 들어갈 때 허용 오차 (칸 여유 각 ~14 cm, 3° = 모서리 ~0.9 cm, ENTER 가 방향도 맞춤)
+        p('rot_tol_out_deg', 4.0)          # 나올 때 (차선 추종이 이어받음)
+        p('rot_kick_s', 0.15)              # 명령은 도는데 |wz| < 0.05 가 이만큼 → 각속도 rot_kick_step 씩 올림 (현수막: 정지마찰 > 동마찰)
+        p('rot_kick_step', 0.1)
+        p('rot_timeout_s', 8.0)            # 회전 단계 시간 한도 → 오차가 rot_accept_deg 안이면 끝으로 침 (0 ↔ 최소 각속도 반복 라이브락 방지)
+        p('rot_accept_deg', 4.0)
+        p('rot_contact_s', 1.5)            # 최대 각속도로도 이만큼 안 돌면 접촉으로 보고 멈춤 → 막힘 처리
+        p('align_head_gate_deg', 8.0)      # ALIGN: 처음 방향과 이보다 틀어져 있으면 앞뒤 이동 전에 제자리 회전부터
+        p('align_min_speed', 0.04)
+        p('scan_t_offset', 0.0)            # 스캔 시각 = stamp + 이것 × scan_time (시뮬 스캔은 순간 → 0. 실차는 드라이버가 시작/끝 중 무엇을 찍는지 보고 +0.5/−0.5)         # ALIGN 최소 속도 (0.02 는 막힘 감시에도 안 걸리고 현수막에서 안 움직임)
         p('rot_slow_deg', 25.0)            # 목표 이만큼 안에서 감속
         p('rot_lag_s', 0.45)               # 각속도 명령 → 실제 회전 지연 (시뮬 구동 PI ~0.45 s, 실차는 잴 것)
         p('measure_s', 0.5)                # 돈 뒤 라이다를 모으는 시간
@@ -146,13 +157,18 @@ class ParkingController(Node):
         self.meas = []
         self.fix_n = 0
         self.retry = 0
-        self.mon = StuckMonitor(self.get_parameter('stuck_s').value, 0.01, 2.0, 0.02, 0.1)
+        self.mon = StuckMonitor(self.get_parameter('stuck_s').value, 0.01, 2.0, 0.015, 0.1)
         self.phase_t = None
         self.after_rot = None
         self.exit_to = None
         self.result = ''
         self.rot_w = 0.0
         self.rot_still = None
+        self.rot_boost, self.rot_nomove, self.rot_full, self.rot_contact = 0.0, None, None, False
+        self.rot_t0 = None                 # 이번 회전 시작 시각 (시간 한도)
+        self.rot_settled, self.rot_coast = False, None
+        self.align_rot = False             # ALIGN 방향 게이트 안 (래치)
+        self.scan_t = None                 # 마지막 스캔의 메시지 시각 (칸 폭 잴 때 그 시각 위치)
 
     # ---------------------------------------------------------------- 입력
     def on_start(self, _msg):
@@ -205,6 +221,7 @@ class ParkingController(Node):
         y = r[ok] * np.sin(a[ok])
         body = (np.abs(x) < HL + 0.005) & (np.abs(y) < HW + 0.005)
         self.scan = (self.get_clock().now().nanoseconds * 1e-9, x[~body], y[~body])
+        self.scan_t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 + self.get_parameter('scan_t_offset').value * msg.scan_time
 
     def on_lane(self, msg):
         if self.state in ('ENTER', 'CHECK') and msg.stop_line_dist_m > 0 and self.bay is not None:
@@ -224,6 +241,8 @@ class ParkingController(Node):
             self.state = s
             self.phase_t = self.now()
             self.mon.reset()
+            self.rot_reset()
+            self.align_rot = False
 
     def pub(self, v, w):
         m = Twist()
@@ -241,6 +260,12 @@ class ParkingController(Node):
         if pt is None:
             return None
         x, y = pt
+        if self.h0 is not None:
+            # 처음 방향 h0 기준으로 돌려서 띠를 고름 — 차가 몇 ° 꺾여 있으면 0.37 m 옆 점이 0.37·ψ 만큼 앞뒤로 보여
+            # LIMO 끝 (칸 경계) 이 2~3 cm 늦게 잡혔다 (다른 세션 검토 11-06: 줄 맞추기로 LIMO 끝에서 −3.5° 꺾임)
+            p = wrap(self.heading() - self.h0)
+            c, sn = math.cos(p), math.sin(p)
+            x, y = x * c - y * sn, x * sn + y * c
         sel = (np.abs(x) < self.get_parameter('side_probe_dx').value) & (self.sgn * y > HW)
         return float((self.sgn * y[sel]).min()) if sel.any() else math.inf
 
@@ -282,34 +307,109 @@ class ParkingController(Node):
         lp, rp = y[band & (y > HW)], y[band & (y < -HW)]
         return (float(lp.min()) if lp.size else None), (float(rp.max()) if rp.size else None)
 
-    def rotate(self, target, now, then):
-        """IMU 로 target 까지 제자리 회전. 끝나면 then 상태로."""
+    def rot_reset(self, now=None):
+        """회전 보조 상태 초기화 (새 회전 시작)."""
+        self.rot_boost, self.rot_nomove, self.rot_still, self.rot_full, self.rot_contact = 0.0, None, None, None, False
+        self.rot_settled, self.rot_coast = False, None
+        self.rot_t0 = now if now is not None else self.now()
+
+    def rotate(self, target, now, then, tol_deg=None):
+        """IMU 로 target 까지 제자리 회전. 끝나면 True.
+        현수막 트랙 (11-06 사용자): 천이 구겨져 느린 제자리 회전이 걸림 → ① 명령은 도는데 안 돌면 각속도를 조금씩 올림 (킥),
+        ② 단계 시간 한도 (rot_timeout_s) 넘으면 오차가 rot_accept_deg 안일 때 끝으로 침 — 예측 정지 (0) ↔ 최소 각속도가 번갈아
+        나오면 막힘 감시가 매번 리셋돼 끝나지도 막히지도 않음 (다른 세션 검토 11-06)."""
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         err = wrap(target - self.heading())
         wz = self.imu[2] if self.imu is not None else 0.0
-        tol = math.radians(g('rot_tol_deg'))
-        if abs(err) < tol:
-            # 오차 안: 멈추고 흔들림이 가라앉을 때까지 (0.3 s 동안 |wz| < 0.05) — 구동 지연 때문에 돌면서 끝내면 넘어간다
+        tol = math.radians(tol_deg if tol_deg is not None else g('rot_tol_deg'))
+        if now - self.rot_t0 > g('rot_timeout_s') and abs(err) < math.radians(g('rot_accept_deg')):
             self.pub(0.0, 0.0)
             self.rot_w = 0.0
+            if abs(wz) < 0.05:
+                self.get_logger().warn(f'[M4] 회전 {g("rot_timeout_s"):.0f} s 넘음 — 오차 {math.degrees(err):+.1f}° 로 끝냄')
+                return True
+            return False
+        # 멈추는 목표 (rot_aim_deg, 작게) 와 끝 인정 (tol) 을 나눔: tol 경계에서 바로 멈추면 한쪽에서 다가오니 늘 경계 안쪽에
+        # 서서 '덜 돎' (시뮬 참값: in +0.9~+2.2°, out −2.8~−4.0° — 다른 세션 검토 11-06)
+        aim = math.radians(g('rot_aim_deg'))
+        # 구동 지연 (rot_lag_s) 동안 지금 각속도로 더 돌 것을 빼고 본 오차 — 0 을 명령해도 그만큼 더 돈다
+        pred = err - wz * g('rot_lag_s')
+        if abs(pred) < aim or pred * err < 0 or (self.rot_settled and abs(err) < tol):
+            # 멈춤: 흔들림이 가라앉을 때까지 (0.3 s 동안 |wz| < 0.05) 기다린 뒤 tol 안이면 끝. 한 번 aim 으로 멈춘 뒤 (rot_settled) 엔
+            # tol 안이면 더 밀지 않음 (안 그러면 실질 허용 오차가 aim 이라 짧은 펄스 반복 — 다른 세션 검토 11-06)
+            if self.rot_coast is None and abs(wz) > 0.1:
+                self.rot_coast = (self.heading(), wz)       # 0 명령 순간 — 정지 뒤 더 돈 각도로 실제 관성 지연을 잼
+            self.rot_settled = True        # 한 번 끊었으면 관성으로 더 도는 동안·정지 확인 동안 tol 안이면 다시 밀지 않음
+            self.pub(0.0, 0.0)
+            self.rot_w = 0.0
+            self.rot_nomove = None
+            self.rot_boost *= 0.5          # 다시 출발할 때 전 킥을 그대로 쓰면 평평한 바닥에서 지나침
             if abs(wz) >= 0.05:
                 self.rot_still = None
                 return False
             self.rot_still = self.rot_still or now
-            return now - self.rot_still >= 0.3
+            if now - self.rot_still < 0.3:
+                return False
+            if self.rot_coast is not None:
+                h1, w1 = self.rot_coast
+                dh = wrap(self.heading() - h1)
+                self.get_logger().info(f'[M4] 회전 관성: wz {w1:+.2f} → 0 명령 뒤 {math.degrees(dh):+.1f}° 더 돎 = 실제 지연 '
+                                       f'{dh / w1:.2f} s (설정 rot_lag_s {g("rot_lag_s"):.2f})')
+                self.rot_coast = None
+            return abs(err) < tol
         self.rot_still = None
-        # 구동 지연 (rot_lag_s) 동안 지금 각속도로 더 돌 것을 빼고 본 오차 — 0 을 명령해도 그만큼 더 돈다
-        pred = err - wz * g('rot_lag_s')
-        if abs(pred) < tol or pred * err < 0:
-            self.pub(0.0, 0.0)
-            self.rot_w = 0.0
-            return False
-        # 오차 비례 (rot_slow_deg 에서 rot_max_w), 최소 rot_min_w (스키드는 작은 각속도로는 안 돈다)
+        self.rot_settled = False
+        self.rot_coast = None
+        # 오차 비례 (rot_slow_deg 에서 rot_max_w), 최소 rot_min_w (스키드는 작은 각속도로는 안 돈다) + 킥
         mag = max(g('rot_min_w'), min(g('rot_max_w'), g('rot_max_w') * abs(pred) / math.radians(g('rot_slow_deg'))))
+        if abs(wz) > 0.15:
+            self.rot_boost, self.rot_nomove = 0.0, None
+        elif abs(wz) < 0.05:
+            if self.rot_nomove is None:
+                self.rot_nomove = now + g('rot_lag_s')          # 첫 킥은 구동 지연이 지난 뒤부터 (그 전엔 원래 안 돎)
+            elif now - self.rot_nomove > g('rot_kick_s'):
+                self.rot_boost = min(g('rot_max_w'), self.rot_boost + g('rot_kick_step'))
+                self.rot_nomove = now
+                self.get_logger().info(f'[M4] 킥: 안 돎 → 각속도 +{self.rot_boost:.2f} (오차 {math.degrees(err):+.1f}°, {self.state})')
+        if mag + self.rot_boost >= g('rot_max_w') and abs(wz) < 0.05:
+            # 최대 각속도인데도 안 돎 = 마찰이 아니라 옆 LIMO 에 닿은 것 — 계속 밀지 않는다
+            self.rot_full = self.rot_full or now + g('rot_lag_s')   # 출발 직후 구동 지연은 빼고 셈
+            if now - self.rot_full > g('rot_contact_s'):
+                self.pub(0.0, 0.0)
+                self.rot_w = 0.0
+                if not self.rot_contact:
+                    self.get_logger().warn(f'[M4] 최대 각속도로 {g("rot_contact_s"):.1f} s 안 돎 — 접촉으로 보고 멈춤 (오차 {math.degrees(err):+.1f}°)')
+                self.rot_contact = True
+                return False
+        else:
+            self.rot_full = None
+        mag = min(max(g('rot_max_w'), g('rot_min_w')), mag + self.rot_boost)
         w = math.copysign(mag, pred)
         self.pub(0.0, w)
         self.rot_w = w
         return False
+
+    def rotate_stuck(self, now, final):
+        """회전 단계 막힘: 정렬부터 다시 하지 않는다 (60~80° 돈 상태에서 ALIGN 은 칸 축 쪽으로 감, ROTATE_OUT 이면 다시 주차함).
+        시간 한도 두 배 넘거나 접촉 (최대 각속도로도 안 돎) 이면 — 나올 때 (final) 는 그대로 끝 (차선 추종이 이어받음),
+        들어갈 때는 StuckMonitor 를 거치지 않고 바로 재시도 (명령이 0 ↔ w 로 오가면 감시가 리셋돼 안 걸림)."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        why = ('최대 각속도로도 안 돎 (접촉)' if self.rot_contact
+               else f'{2 * g("rot_timeout_s"):.0f} s 넘게 안 끝남' if now - self.rot_t0 >= 2 * g('rot_timeout_s') else None)
+        if why is None:
+            return False
+        if final:
+            return True
+        self.retry += 1
+        self.pub(0.0, 0.0)
+        if self.retry > g('max_retry'):
+            self.set_state('FAIL', f'회전 막힘: {why} — 재시도 {self.retry - 1} 번 넘음, 멈춤')
+            self.get_logger().error('[M4] 주차 실패 — 멈춤')
+            return True
+        self.after_rot = 'ALIGN'
+        self.rot_target = self.h0
+        self.set_state('ROTATE_OUT_RETRY', f'회전 막힘: {why} → 처음 방향으로 돌아서 다시 정렬 ({self.retry} 번째)')
+        return True
 
     def stuck(self, now, v, w):
         if self.phase_t is not None and now - self.phase_t < 2.0 and self.state == 'APPROACH':
@@ -371,11 +471,11 @@ class ParkingController(Node):
         elif s == 'ALIGN':
             self.do_align(now)
         elif s == 'ROTATE_IN':
-            if self.rotate(self.rot_target, now, 'MEASURE'):
+            if self.rotate(self.rot_target, now, 'MEASURE', g('rot_tol_in_deg')):
                 self.rot_err['in'] = math.degrees(wrap(self.heading() - self.rot_target))
                 self.set_state('MEASURE', f'90° 회전 끝 (IMU 오차 {self.rot_err["in"]:+.1f}°)')
                 self.meas = []
-            elif self.stuck(now, 0.0, self.rot_w):
+            elif self.rotate_stuck(now, False):
                 return
         elif s == 'MEASURE':
             self.do_measure(now)
@@ -386,10 +486,10 @@ class ParkingController(Node):
         elif s == 'FIX':
             self.do_fix(now)
         elif s == 'ROTATE_OUT_RETRY':
-            if self.rotate(self.rot_target, now, self.after_rot):
+            if self.rotate(self.rot_target, now, self.after_rot, g('rot_tol_out_deg')):
                 self.set_state(self.after_rot or 'ALIGN', '처음 방향으로 돌아섬 → 다시 정렬')
-            elif self.stuck(now, 0.0, self.rot_w):
-                return
+            elif self.rotate_stuck(now, True):
+                self.set_state(self.after_rot or 'ALIGN', f'돌아서기도 안 끝남 (오차 {math.degrees(wrap(self.rot_target - self.heading())):+.1f}°) → 그대로 정렬')
         elif s == 'HOLD':
             self.pub(0.0, 0.0)
             if now - self.phase_t >= g('hold_s'):
@@ -398,21 +498,32 @@ class ParkingController(Node):
         elif s == 'EXIT':
             self.do_exit(now)
         elif s == 'ROTATE_OUT':
-            if self.rotate(self.h0, now, 'DONE'):
+            out_done = self.rotate(self.h0, now, 'DONE', g('rot_tol_out_deg'))
+            if not out_done and self.rotate_stuck(now, True):
+                self.get_logger().warn(f'[M4] 나올 때 회전이 {2 * g("rot_timeout_s"):.0f} s 넘게 안 끝남 — 그대로 끝 (차선 추종이 이어받음)')
+                out_done = True
+            if out_done:
                 self.rot_err['out'] = math.degrees(wrap(self.heading() - self.h0))
+                if abs(self.rot_err['out']) > 15.0:
+                    self.get_logger().warn(f'[M4] 나올 때 방향 오차 {self.rot_err["out"]:+.1f}° 로 끝냄 — 차선 추종이 못 잡을 수 있음')
                 self.result += f', 나올 때 90° 회전 오차 (IMU) {self.rot_err["out"]:+.1f}°, 전체 {now - self.t0:.1f} s'
                 self.set_state('DONE', self.result)
                 self.result_pub.publish(String(data=self.result))
                 self.done_pub.publish(Empty())
                 self.pub(0.0, 0.0)
-            elif self.stuck(now, 0.0, self.rot_w):
-                return
 
     def do_approach(self, now):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         d = self.side_dist()
         pr = self.prof
-        a = self.along()
+        ps = self.pose_at(self.scan_t) if self.scan_t is not None else None
+        a_now = self.along(ps) if ps is not None else self.along()   # 그 스캔을 찍은 때의 위치
+        # 가까움↔멂 경계는 실제로 지난 뒤 첫 스캔에서 잡힘 (평균 반 주기 늦음 → 칸 가운데가 진행 방향으로 v × 반 주기 밀림,
+        # 0.2 m/s 에서 ~1.3 cm). 경계 위치 = 직전 스캔과 이번 스캔의 가운데 (다른 세션 검토 11-06)
+        new_scan = pr.get('scan_t') != self.scan_t
+        a = 0.5 * (pr['a_prev'] + a_now) if pr.get('a_prev') is not None else a_now
+        if not new_scan:
+            a = pr.get('a_edge', a_now)
         near = d is not None and d < g('side_near_m')
         far = d is None or d > g('side_far_m')
         if pr['phase'] == 'near1' and near:
@@ -424,6 +535,7 @@ class ParkingController(Node):
                 pr['phase'], pr['far0'] = 'far', a
                 self.get_logger().info(f'[M4] 옆: 가까움 → 멂 (LIMO 끝, 진행 {a:.3f} m, LIMO 끝면까지 {np.median(pr["near_d"]):.3f} m)')
         elif pr['phase'] == 'far' and near:
+            self.row_ref = d                   # 줄 맞추기 기준을 LIMO 마다 새로 (첫 LIMO 기준이면 다음 LIMO 끝에서 2° 꺾임)
             w = a - pr['far0']
             if g('gap_min_m') <= w <= g('gap_max_m'):
                 pr['far1'] = a
@@ -441,12 +553,18 @@ class ParkingController(Node):
                 return
             pr['phase'], pr['near_d'] = 'in_near1', [d]
             self.get_logger().info(f'[M4] 틈 {w:.3f} m — 칸 폭이 아님, 다음 틈을 찾음')
+        if new_scan:
+            pr['a_prev'], pr['scan_t'], pr['a_edge'] = a_now, self.scan_t, a
         if near and self.row_ref is None:
             self.row_ref = d
         # 방향 유지 (IMU) + 주차 LIMO 줄과 옆 거리 유지 (가까움 구간에서만)
         h_cmd = self.h0
         if near and self.row_ref is not None:
-            corr = g('row_keep_k') * (d - self.row_ref) * self.sgn
+            # 기준 = 지금 지나는 LIMO 의 최근 옆 거리 중앙값 (첫 LIMO 기준이면 LIMO 끝면 위치 차이 2.5 cm 를 줄 틀어짐으로 보고
+            # 칸 경계 바로 앞에서 2° 꺾었다)
+            nd = pr['near_d'][-15:]
+            ref = float(np.median(nd)) if len(nd) >= 3 else self.row_ref
+            corr = g('row_keep_k') * (d - ref) * self.sgn
             h_cmd = self.h0 + max(-math.radians(g('row_keep_max_deg')), min(math.radians(g('row_keep_max_deg')), corr))
         w = 1.5 * wrap(h_cmd - self.heading())
         v = g('approach_speed')
@@ -456,6 +574,30 @@ class ParkingController(Node):
 
     def do_align(self, now):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
+        herr = wrap(self.h0 - self.heading())
+        if not self.align_rot and abs(herr) > math.radians(g('align_head_gate_deg')):
+            # 방향이 많이 틀어진 채 들어옴 (돌아서기가 접촉·시간 한도로 덜 끝남 등) — 앞뒤로 가면 칸 축 (옆 LIMO) 쪽으로 감.
+            # 제자리에서 먼저 처음 방향으로, 다 돌 때까지 (래치) (다른 세션 검토 11-06)
+            self.align_rot = True
+            self.rot_reset(now)
+            self.get_logger().info(f'[M4] 정렬 전 방향 맞추기: 처음 방향과 {math.degrees(herr):+.1f}° 틀어짐 → 제자리 회전')
+        if self.align_rot:
+            if self.rotate(self.h0, now, None, g('rot_tol_out_deg')):
+                self.align_rot = False
+                self.mon.reset()
+                return
+            why = ('최대 각속도로도 안 돎 (접촉)' if self.rot_contact
+                   else '시간 한도' if now - self.rot_t0 >= 2 * g('rot_timeout_s') else None)
+            if why is not None:
+                self.retry += 1
+                self.pub(0.0, 0.0)
+                if self.retry > g('max_retry'):
+                    self.set_state('FAIL', f'정렬 전 방향 맞추기 실패: {why} (오차 {math.degrees(herr):+.1f}°) — 재시도 넘음, 멈춤')
+                    self.get_logger().error('[M4] 주차 실패 — 멈춤')
+                    return
+                self.get_logger().warn(f'[M4] 정렬 전 방향 맞추기 막힘: {why} (오차 {math.degrees(herr):+.1f}°) — 다시 ({self.retry} 번째)')
+                self.rot_reset(now)
+            return
         err = self.bay['along'] - self.along()
         if abs(err) < g('align_tol_m') and abs(self.speed) < 0.01:
             # 제자리 회전 반경 + 여유 확인 (라이다 점 쓸기 검사)
@@ -469,8 +611,8 @@ class ParkingController(Node):
             self.set_state('ROTATE_IN', f'칸 가운데선 (오차 {err * 100:+.1f} cm) → 제자리 {"오른쪽" if self.sgn < 0 else "왼쪽"} 90°')
             return
         v = max(-g('align_speed'), min(g('align_speed'), 1.2 * err))
-        if 0 < abs(v) < 0.02:
-            v = math.copysign(0.02, v)
+        if 0 < abs(v) < g('align_min_speed'):
+            v = math.copysign(g('align_min_speed'), v)
         if abs(err) < g('align_tol_m'):
             v = 0.0
         w = 1.5 * wrap(self.h0 - self.heading())

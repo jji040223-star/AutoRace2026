@@ -106,6 +106,7 @@ class Sim2D(Node):
         p('scan_hz', 8.0)
         p('odom_hz', 50.0)
         p('imu_hz', 100.0)
+        p('pose_hz', 20.0)                 # /sim2d/pose (참 위치) — 평가 기록용 (예전 1 Hz 는 회전·근접 순간을 못 봄)
         p('raster_res', 0.0025)            # 위에서 본 트랙 그림 [m/px]
         # 카메라 (실제 자세 — 인식 노드 설정과 다르게 주면 실차 설정 오차 재현)
         p('width', 640)
@@ -135,6 +136,10 @@ class Sim2D(Node):
         p('odom_v_scale', 1.0)
         p('odom_w_scale', 1.0)
         p('imu_noise', 0.002)
+        p('imu_bias', 0.0)                 # [rad/s] 자이로 치우침 (멈춰 있어도 도는 것처럼) — 가혹 조건 시험
+        p('imu_w_scale', 1.0)              # 자이로 배율 오차
+        p('act_v_gain', 1.0)               # 실제 속도 = 명령 × 이것 (배터리 약함 등)
+        p('act_w_gain', 1.0)               # 실제 회전 = 명령 × 이것 (스키드 미끄러짐)
         # 라이다
         p('laser_x', 0.103)
         p('scan_points', 375)
@@ -144,6 +149,7 @@ class Sim2D(Node):
         p('scan_flip', False)
         # 시설물
         p('static_limos', True)
+        p('static_layout', 'default')       # default (첫 줄 차로 0 으로 진입) | mirror (차로 2 로 진입)
         p('parking_limos', True)
         p('cones', True)
         p('cone_layout', 'default')
@@ -153,6 +159,17 @@ class Sim2D(Node):
         p('seed', 0)
         p('fake_detections', True)         # YOLO 대신: 보이는 표지판·신호등 박스를 /perception/detections, /perception/traffic_light_detections 로
         p('sign_range_m', 4.5)
+        # 실차 모드 (실차 run1~5, 11-05 에서 본 것). 기본값은 모두 꺼짐 = 예전 시뮬과 같음
+        p('det_miss', 0.0)                 # 보이는 표지판을 그 장에서 놓칠 확률 (실차: 띄엄띄엄 잡혀 '연속 3 장' 을 못 채움, run5)
+        p('det_miss_stick', 0.0)           # 앞 장에서 놓쳤으면 이번 장도 놓칠 확률 (놓침이 몰려서 옴)
+        p('det_conf', [0.9, 0.9])          # 확신도 범위 (실차 0.51~0.91 — 멀면 낮게)
+        p('det_false_rate', 0.0)           # 장마다 가짜 표지판 박스가 나올 확률 (실차 run4: 3차선에서 화면 가득 478px 과속방지턱)
+        p('det_false_labels', ['speed_bump', 'slow', 'crosswalk', 'parking'])
+        p('det_false_box_px', [30, 480])   # 가짜 박스 높이 범위
+        p('det_false_frames', [1, 5])      # 가짜 박스가 이어지는 장 수 (실차 run4: 몇 장 연속)
+        p('cam_stall_rate', 0.0)           # 장마다 영상이 끊기기 시작할 확률 (실차 run2: 차선 입력 끊김)
+        p('cam_stall_s', [0.2, 0.6])       # 끊기는 시간 범위 [s] — 그동안 영상·뎁스·검출 안 나감
+        p('sign_posts', False)             # 표지판 지주를 라이다에 보이게 (실차 run2: 받침대 점 3 개 → 주차 오작동)
         p('bystanders', [0.0])             # 트랙 옆 사람 다리 [x, y, x, y, …] (각 점 = 다리 하나, 지름 bystander_d). [0.0] = 없음
         p('bystander_d', 0.09)
         p('bystander_step', [0.0, 0.0])    # 사람이 발을 옮김: bystander_step_s 마다 다리가 이만큼 [dx, dy] 갔다 왔다 (0 = 가만히)
@@ -207,7 +224,7 @@ class Sim2D(Node):
 
         self.wall_last = None
         self.create_timer(1.0 / g('physics_hz'), self.step)
-        self.due = {'cam': 0.0, 'depth': 0.0, 'scan': 0.0, 'odom': 0.0, 'imu': 0.0, 'status': 0.0}
+        self.due = {'cam': 0.0, 'depth': 0.0, 'scan': 0.0, 'odom': 0.0, 'imu': 0.0, 'status': 0.0, 'pose': 0.0}
         self.get_logger().info(
             f"sim2d: 트랙 {self.raster.shape[1]}×{self.raster.shape[0]} px ({g('raster_res') * 1000:.1f} mm/px), "
             f"시설물 {sum(b.alive for b in self.boxes)} 개, 카메라 높이 {g('cam_height')} m 기울기 {g('cam_pitch_deg')}° "
@@ -261,8 +278,11 @@ class Sim2D(Node):
         self.boxes = []
         limo = dict(hl=0.161, hw=0.109, z0=0.0, z1=0.252, color=(0x22, 0x22, 0x24))
         if g('static_limos'):
-            for i, (x, y, yaw) in enumerate([[7.85, 0.94, 180], [7.85, 1.46, 180], [6.95, 0.42, 180], [6.95, 1.46, 180],
-                                             [6.05, 0.94, 180], [5.15, 0.42, 180], [5.15, 1.46, 180]]):
+            layout = [[7.85, 0.94, 180], [7.85, 1.46, 180], [6.95, 0.42, 180], [6.95, 1.46, 180],
+                      [6.05, 0.94, 180], [5.15, 0.42, 180], [5.15, 1.46, 180]]     # default: 첫 줄은 차로 0 (왼쪽) 만 빔
+            if g('static_layout') == 'mirror':
+                layout = [[x, 1.88 - y, yaw] for x, y, yaw in layout]         # 가운데 차로 기준 좌우 뒤집음: 첫 줄은 차로 2 (오른쪽) 만 빔
+            for i, (x, y, yaw) in enumerate(layout):
                 self.boxes.append(Box('limo', x, y, math.radians(yaw), name=f'M7_LIMO_{i}', **limo))
         if g('parking_limos'):
             for i, (x, y, yaw) in enumerate([[6.36, 4.27, -90], [7.40, 4.27, -90]]):
@@ -290,6 +310,8 @@ class Sim2D(Node):
                                       ('M3_ped', 9.20, 2.50, 90, (0x20, 0x60, 0xd0)), ('M4_parking', 5.95, 4.45, 180, (0x20, 0x50, 0xc0)),
                                       ('M2_branch', 4.20, 0.94, 0, (0x20, 0x60, 0xd0))):
             self.boxes.append(Box('sign', x, y, math.radians(face), 0.005, 0.06, 0.14, 0.26, col, name=name))
+            if g('sign_posts'):
+                self.boxes.append(Box('pole', x, y, 0.0, 0.015, 0.015, 0.0, 0.14, (0x60, 0x60, 0x60), name=name + '_post'))
         self.hits = {}
         self.knocked = set()
 
@@ -510,6 +532,7 @@ class Sim2D(Node):
             vc = 0.0
         elif abs(wc) < g('w_deadband') and abs(vc) < 1e-3:
             wc = 0.0
+        vc, wc = vc * g('act_v_gain'), wc * g('act_w_gain')   # 실제 차가 명령보다 덜·더 감/돎 (스키드·배터리)
         self.v += (vc - self.v) * min(1.0, dt / g('tau_v'))
         self.w += (wc - self.w) * min(1.0, dt / g('tau_w'))
         nyaw = wrap(self.yaw + self.w * dt)
@@ -551,12 +574,19 @@ class Sim2D(Node):
         self.pub_clock.publish(Clock(clock=stamp(self.sim_t)))
         st = stamp(self.sim_t)
         for key, hz, fn in (('odom', g('odom_hz'), self.publish_odom), ('imu', g('imu_hz'), self.publish_imu),
-                            ('scan', g('scan_hz'), self.publish_scan), ('status', 1.0, self.publish_status)):
+                            ('scan', g('scan_hz'), self.publish_scan), ('status', 1.0, self.publish_status),
+                            ('pose', g('pose_hz'), self.publish_pose)):
             if self.sim_t >= self.due[key]:
                 self.due[key] = self.sim_t + 1.0 / hz
                 fn(st)
         if self.sim_t >= self.due['cam']:
             self.due['cam'] = self.sim_t + 1.0 / g('camera_hz')
+            if self.sim_t < getattr(self, '_stall_until', 0.0):
+                return                       # 실차 모드: 영상 끊김
+            if g('cam_stall_rate') > 0 and self.rng.random() < g('cam_stall_rate'):
+                lo, hi = g('cam_stall_s')
+                self._stall_until = self.sim_t + self.rng.uniform(lo, hi)
+                return
             want_depth = self.sim_t >= self.due['depth']
             if want_depth:
                 self.due['depth'] = self.sim_t + 1.0 / g('depth_hz')
@@ -622,8 +652,10 @@ class Sim2D(Node):
                 best = gap
         return best
 
-    def publish_status(self, _st):
+    def publish_pose(self, _st):
         self.pub_pose.publish(Pose2D(x=self.x, y=self.y, theta=self.yaw))
+
+    def publish_status(self, _st):
         d = dict(t=round(self.sim_t, 2), x=round(self.x, 3), y=round(self.y, 3), yaw_deg=round(math.degrees(self.yaw), 1),
                  v=round(self.v, 3), w=round(self.w, 3), line_now_m=round(self.last_line, 3),
                  min_line_m=round(self.stats['min_line_m'], 3), touch_s=round(self.stats['touch_s'], 2),
@@ -662,7 +694,7 @@ class Sim2D(Node):
         m.header.stamp, m.header.frame_id = st, 'imu_link'
         q = quat_yaw(self.imu_yaw)
         m.orientation.x, m.orientation.y, m.orientation.z, m.orientation.w = q
-        m.angular_velocity.z = self.true_w + float(self.np_rng.normal(0, self.g('imu_noise')))
+        m.angular_velocity.z = self.true_w * self.g('imu_w_scale') + self.g('imu_bias') + float(self.np_rng.normal(0, self.g('imu_noise')))
         m.linear_acceleration.z = 9.81
         self.pub_imu.publish(m)
 
@@ -746,14 +778,51 @@ class Sim2D(Node):
                 if label is None:
                     label = 'turn_a' if self.branch == 'A' else 'turn_b'
                 bb = self.face_box(b, C, R, b.hw, b.z0, b.z1)
-                if label and bb:
-                    det.detections.append(Detection(label=label, confidence=0.9, x1=bb[0], y1=bb[1], x2=bb[2], y2=bb[3]))
+                if label and bb and not self.det_missed(b.name):
+                    det.detections.append(Detection(label=label, confidence=self.det_confidence(bb), x1=bb[0], y1=bb[1], x2=bb[2], y2=bb[3]))
             elif b.kind == 'light':
                 bb = self.face_box(b, C, R, b.hw, b.z0, b.z1)
                 if bb:
                     light.detections.append(Detection(label='traffic_light', confidence=0.9, x1=bb[0], y1=bb[1], x2=bb[2], y2=bb[3]))
+        fk = getattr(self, '_false', None)
+        if fk is None and self.g('det_false_rate') > 0 and self.rng.random() < self.g('det_false_rate'):
+            lo, hi = self.g('det_false_box_px')
+            h = int(self.rng.uniform(lo, hi))
+            w = max(10, int(h * self.rng.uniform(0.6, 1.2)))
+            x1 = int(self.rng.uniform(0, max(1, W - w)))
+            y1 = int(self.rng.uniform(0, max(1, H - h)))
+            n0, n1 = self.g('det_false_frames')
+            fk = self._false = [self.rng.choice(list(self.g('det_false_labels'))), (x1, y1, min(W - 1, x1 + w), min(H - 1, y1 + h)),
+                                self.rng.randint(int(n0), int(n1))]
+            self.get_logger().info(f'[sim2d] 실차 모드: 가짜 {fk[0]} 박스 높이 {fk[1][3] - fk[1][1]}px, {fk[2]} 장')
+        if fk is not None:
+            det.detections.append(Detection(label=fk[0], confidence=float(self.rng.uniform(0.5, 0.7)),
+                                            x1=fk[1][0], y1=fk[1][1], x2=fk[1][2], y2=fk[1][3]))
+            fk[2] -= 1
+            if fk[2] <= 0:
+                self._false = None
         self.pub_det.publish(det)
         self.pub_light_det.publish(light)
+
+    def det_missed(self, name):
+        """실차 모드: 이 장에서 표지판을 놓쳤나 (놓침이 몰려 오게 앞 장 결과를 기억)."""
+        p = self.g('det_miss')
+        if p <= 0:
+            return False
+        last = self._det_last_miss.get(name, False) if hasattr(self, '_det_last_miss') else False
+        if not hasattr(self, '_det_last_miss'):
+            self._det_last_miss = {}
+        miss = self.rng.random() < (max(p, self.g('det_miss_stick')) if last else p)
+        self._det_last_miss[name] = miss
+        return miss
+
+    def det_confidence(self, bb):
+        """실차 모드: 확신도 — 박스가 작을수록 (멀수록) 범위 아래쪽."""
+        lo, hi = self.g('det_conf')
+        if hi <= lo:
+            return float(lo)
+        near = min(1.0, (bb[3] - bb[1]) / 80.0)
+        return float(lo + (hi - lo) * (0.5 * near + 0.5 * self.rng.random()))
 
     def publish_static_tf(self):
         g = self.g

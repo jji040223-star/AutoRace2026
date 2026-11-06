@@ -5,7 +5,7 @@ parking_controller:
     bay_side: "right"                   # 주차 칸 줄이 진행 방향 어느 쪽 (시뮬: 2차로 +x 로 가면 오른쪽)
     bay_w: 0.50                         # 칸 안쪽 폭 (진행 방향) [m]
     bay_d: 0.60                         # 칸 안쪽 깊이 [m]
-    approach_speed: 0.10
+    approach_speed: 0.20  # 11-06: 0.10→0.20 (칸 경계는 스캔 사이 보간·방향 보정으로 속도 영향 줄임)
     wait_detect_m: 0.9                  # 통합 모드: 차선 추종 중 앞옆 이 거리 안에 주차 LIMO 가 보이면 접근 시작
     wait_min_pts: 10                    #   점 이만큼 이상 + 앞뒤 wait_min_len_m 이상 + wait_confirm 번 연속 (표지판 받침대·의자 다리 거름)
     wait_min_len_m: 0.15
@@ -19,16 +19,16 @@ parking_controller:
     gap_max_m: 1.30
     limo_half_l: 0.161                  # 이웃 LIMO 끝면 → 칸 깊이 가운데
     align_tol_m: 0.008
-    align_speed: 0.06
+    align_speed: 0.10
     rot_margin_m: 0.03                  # 제자리 회전 반경 (0.194 m) 여유 — 쓸기 검사
-    rot_tol_deg: 1.5                    # IMU 90° 회전 허용 오차 (규정 ±2°)
-    rot_max_w: 0.8
-    rot_min_w: 0.2                      # 스키드는 작은 각속도로는 잘 안 돈다 (0.15 면 1 s 에 2° 도 못 돎, 0.3 이면 지연으로 ±3° 진동)
+    rot_tol_deg: 1.5                    # IMU 90° 회전 허용 오차 (기본값 — 들어갈 때·나올 때는 rot_tol_in/out_deg). 규정은 각도 기준 없음, 네 모서리만
+    rot_max_w: 1.0
+    rot_min_w: 0.45  # 11-06: 0.2→0.45 — 현수막 트랙은 느린 제자리 회전이 구김에 걸려 안 돎 (run4 막힘, 시뮬 재현·해결)
     rot_slow_deg: 25.0                  # 오차 비례 감속 (이 오차에서 rot_max_w)
-    rot_lag_s: 0.45                     # 명령 → 실제 회전 지연: 이 시간 동안 지금 각속도로 더 돌 것을 빼고 멈춤 (시뮬 실측, 실차는 잴 것)
+    rot_lag_s: 0.2  # 11-06: 0.45→0.2 — 시뮬 실측 0.09~0.24 s. 실차는 로그 [M4] 회전 관성 … 실제 지연 으로 맞출 것
     measure_s: 0.5
     measure_tol_m: 0.05                 # 돈 뒤 다시 잰 옆 오차가 이보다 크면 돌아 나와 다시 정렬
-    enter_speed: 0.09                   # 진입 0.08~0.10
+    enter_speed: 0.12                   # 진입 (11-06: 0.09→0.12)
     enter_min_speed: 0.03
     enter_kp: 0.5
     enter_k_lat: 2.0                    # 양옆 거리 같게 (P)
@@ -40,7 +40,7 @@ parking_controller:
     corner_min_m: 0.03                  # 모서리 → 선 여유가 이보다 작으면 앞뒤 보정
     max_fix: 2
     hold_s: 2.5                         # 주차 뒤 정지
-    exit_speed: 0.09
+    exit_speed: 0.20
     stuck_s: 1.0                        # 움직이라는데 이만큼 못 움직이면 정렬부터 다시
     max_retry: 3
     laser_x: 0.103
