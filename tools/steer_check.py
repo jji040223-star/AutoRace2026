@@ -77,6 +77,12 @@ def main():
         if abs(kc) < 0.1:
             straight.append(ka)
         rows.append((t - t0, v, kc, ka))
+    vr = [abs(near(odom, t + 0.25).twist.twist.linear.x) / abs(m.linear.x) for t, m in cmd if abs(m.linear.x) > 0.1]
+    wr = [near(imu, t + 0.25).angular_velocity.z / m.angular.z for t, m in cmd if abs(m.angular.z) > 0.3 and abs(m.linear.x) > 0.1]
+    wo = [near(odom, t + 0.25).twist.twist.angular.z / m.angular.z for t, m in cmd if abs(m.angular.z) > 0.3 and abs(m.linear.x) > 0.1]
+    print(f'0) 원시값 비 (중앙값): odom v / 명령 v = {med(vr):.2f}, IMU wz / 명령 ω = {med(wr):.2f}, odom wz / 명령 ω = {med(wo):.2f}  '
+          f'(명령 v 최대 {max(abs(m.linear.x) for _, m in cmd):.2f}, odom v 최대 {max(abs(o.twist.twist.linear.x) for _, o in odom):.2f}, '
+          f'IMU |wz| 최대 {max(abs(i.angular_velocity.z) for _, i in imu):.2f}, 명령 |ω| 최대 {max(abs(m.angular.z) for _, m in cmd):.2f})')
     print(f'\n1) 움직인 명령 {moving} 개 중 곡률 한도 {a.kmax} 넘음: {sat} ({100 * sat / max(1, moving):.1f} %) — 넘은 만큼 덜 돎')
     print(f'2) 한도 안 회전 (0.5 < |k| < {a.kmax}) 실제/명령 비 중앙값: {med(ratio):.2f} (n {len(ratio)}) — 1 이면 정상')
     print(f'3) 직진 명령 때 실제 곡률 평균: {sum(straight) / max(1, len(straight)):+.3f} 1/m (n {len(straight)}) — '
