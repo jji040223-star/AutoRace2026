@@ -282,6 +282,12 @@ class Sim2D(Node):
         self.raster = img
         # 노란 선까지 거리 [m] (바퀴가 선을 밟는지 판정)
         self.yellow_dist = cv2.distanceTransform(255 - yellow, cv2.DIST_L2, 5).astype(np.float32) * res
+        # 선 밖 (트랙 데이터 off_road·island = 노란 선 바깥) — 규정 차선 이탈 판정 (한쪽 두 바퀴가 선 밖) 용
+        off = np.zeros((h, w), np.uint8)
+        for e in self.track['elements']:
+            if e['class'] in ('off_road', 'island'):
+                cv2.fillPoly(off, [px(e['exterior'])] + [px(hl) for hl in e.get('holes', [])], 255)
+        self.off_mask = off > 0
 
     def world_px(self, x, y):
         return (x - self.x0) / self.res, (self.ytop - y) / self.res
@@ -678,19 +684,41 @@ class Sim2D(Node):
     # ------------------------------------------------------------------ 기록
     def stats_reset(self):
         self.stats = {'min_line_m': float('inf'), 'touch_s': 0.0, 'dist_m': 0.0, 'since': getattr(self, 'sim_t', 0.0),
+                      'lane_out': 0, 'lane_out_s': 0.0,   # 규정 차선 이탈 (한쪽 두 바퀴가 선 밖) 횟수·시간 — 라바콘 구간 면제는 위치로 거를 것
+                      'lane_outs': [],       # [x, y, 쪽 L/R] (처음 30 번)
                       'cells': {},           # 1 m 칸 'x,y' → [그 칸에서 바퀴~노란 선 최소 거리, 선 밟은 시간]
                       'stops': []}           # 정지선 앞에서 멈출 때마다 바퀴 맨 앞 → 정지선 가까운 끝 [m] (음수 = 밟음)
         self._still_s, self._stop_logged = 0.0, False
         self.prev_xy = None
+        self._out_armed, self._out_side = False, None
 
     def track_stats(self, dt):
         dmin = float('inf')
         c, s = math.cos(self.yaw), math.sin(self.yaw)
+        out = []                             # WHEELS 순서: 앞왼, 앞오, 뒤왼, 뒤오
         for wx, wy in WHEELS:
             px, py = self.world_px(self.x + wx * c - wy * s, self.y + wx * s + wy * c)
             i, j = int(py), int(px)
             if 0 <= i < self.yellow_dist.shape[0] and 0 <= j < self.yellow_dist.shape[1]:
                 dmin = min(dmin, float(self.yellow_dist[i, j]))
+                out.append(bool(self.off_mask[i, j]))
+            else:
+                out.append(True)
+        # 규정 차선 이탈: 한쪽 (왼쪽 두 바퀴 또는 오른쪽 두 바퀴) 이 모두 선 밖. 출발 칸은 트랙 데이터에서 off_road 라
+        # 네 바퀴가 한 번 다 트랙 안에 들어온 뒤부터 셈
+        if not getattr(self, '_out_armed', False):
+            self._out_armed = not any(out)
+        else:
+            side = 'L' if (out[0] and out[2]) else 'R' if (out[1] and out[3]) else None
+            if side is not None:
+                self.stats['lane_out_s'] += dt
+            if side is not None and getattr(self, '_out_side', None) is None:
+                self.stats['lane_out'] += 1
+                if len(self.stats['lane_outs']) < 30:
+                    self.stats['lane_outs'].append([round(self.x, 2), round(self.y, 2), side])
+                self.get_logger().warn(f'[sim2d] 차선 이탈 (규정: {"왼" if side == "L" else "오른"}쪽 두 바퀴가 선 밖) — 차 '
+                                       f'({self.x:.2f}, {self.y:.2f}) yaw {math.degrees(self.yaw):.0f}°, {self.stats["lane_out"]} 번째')
+            self._out_side = side
         self.last_line = dmin
         self.stats['min_line_m'] = min(self.stats['min_line_m'], dmin)
         touching = dmin < 0.02              # 바퀴 접지 반폭 (~2 cm) 안에 노란 선
@@ -745,6 +773,7 @@ class Sim2D(Node):
         d = dict(t=round(self.sim_t, 2), x=round(self.x, 3), y=round(self.y, 3), yaw_deg=round(math.degrees(self.yaw), 1),
                  v=round(self.v, 3), w=round(self.w, 3), line_now_m=round(self.last_line, 3),
                  min_line_m=round(self.stats['min_line_m'], 3), touch_s=round(self.stats['touch_s'], 2),
+                 lane_out=self.stats['lane_out'], lane_out_s=round(self.stats['lane_out_s'], 2), lane_outs=self.stats['lane_outs'],
                  dist_m=round(self.stats['dist_m'], 2), collisions=dict(self.hits), knocked=sorted(self.knocked),
                  cells={k: [round(v[0], 3), round(v[1], 2)] for k, v in self.stats['cells'].items()},
                  stops=self.stats['stops'],
