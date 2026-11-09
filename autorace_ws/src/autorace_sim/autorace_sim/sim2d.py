@@ -142,6 +142,14 @@ class Sim2D(Node):
         # 몸이 궤적보다 안쪽을 봄 — 최대 조향에서 ~12°). center = 예전 모델 (base_link 가 자전거 기준점, 미끄럼각 0) — 비교용.
         # limo_base 의 r = v / w 도 뒷축 기준으로 봄 (agilex limo_driver 의 안쪽 바퀴 각 atan(L / (r − 윤거/2)) — 실차에서 확인할 것)
         p('ack_ref', 'rear')
+        # 실차 차이 흉내 (기본 = 없음): 서보 가운데 어긋남, 좌우 비대칭, 유격, 명령 지연, 빠를수록 덜 돎, 바닥 옆 미끄럼
+        p('ack_steer_bias_deg', 0.0)       # 실제 조향 = 명령 + 이것 [deg] (+ = 왼쪽)
+        p('ack_steer_scale_left', 1.0)     # 왼쪽 / 오른쪽 조향만 따로 배율 (ack_steer_scale 에 곱함)
+        p('ack_steer_scale_right', 1.0)
+        p('ack_steer_backlash_deg', 0.0)   # 조향 유격 [deg] — 목표가 이 반만큼 넘게 바뀌어야 실제 각이 움직임
+        p('ack_understeer_k', 0.0)         # 실제 곡률 ÷ (1 + k v²) [s²/m²]
+        p('ack_slip_noise', 0.0)           # 옆 미끄럼 무작위 걸음 [m / (m/s · √s)]
+        p('cmd_latency_s', 0.0)            # 명령 지연 [s] (diff·아커만 공통)
         p('ack_steer_scale', 1.0)          # 실제 조향각 = 명령 조향각 × 이것 (서보·링크 오차로 덜 꺾임 < 1 — '실차가 덜 도는' 상황 재현).
                                            # 최대 조향도 같이 줄어 실제 최소 반경 = L / tan(scale · atan(L / ack_min_radius))
         p('odom_v_scale', 1.0)
@@ -570,6 +578,14 @@ class Sim2D(Node):
         self.wall_last = now
         self.sim_t += dt
         vc, wc = self.cmd if self.sim_t - self.cmd_t < g('cmd_timeout') else (0.0, 0.0)
+        if g('cmd_latency_s') > 0:
+            # 명령 지연 (USB·limo_base·모터 드라이버): 이만큼 전에 받은 명령을 씀
+            q = self._cmd_q if hasattr(self, '_cmd_q') else []
+            q.append((self.sim_t, vc, wc))
+            while len(q) > 1 and q[1][0] <= self.sim_t - g('cmd_latency_s'):
+                q.pop(0)
+            self._cmd_q = q
+            _, vc, wc = q[0]
         vc = max(-g('max_v'), min(g('max_v'), vc))
         wc = max(-g('max_w'), min(g('max_w'), wc))
         if abs(vc) < g('v_deadband') and abs(wc) < g('w_deadband'):
@@ -589,10 +605,18 @@ class Sim2D(Node):
                 dc = math.copysign(dmax, wc)
             else:
                 dc = max(-dmax, min(dmax, math.atan(L * wc / vc)))
-            dc *= g('ack_steer_scale')
+            dc *= g('ack_steer_scale') * (g('ack_steer_scale_left') if dc > 0 else g('ack_steer_scale_right') if dc < 0 else 1.0)
+            dc += math.radians(g('ack_steer_bias_deg'))    # 서보 가운데 어긋남 (곧게 명령해도 한쪽으로 휨)
+            bl = math.radians(g('ack_steer_backlash_deg'))
+            if bl > 0:                                     # 조향 유격: 목표가 유격 반만큼 넘게 바뀌어야 실제 각이 따라감
+                hold = getattr(self, '_steer_hold', dc)
+                if abs(dc - hold) > bl / 2:
+                    hold = dc - math.copysign(bl / 2, dc - hold)
+                self._steer_hold = dc = hold
             self.steer = getattr(self, 'steer', 0.0)
             self.steer += (dc - self.steer) * min(1.0, dt / g('steer_tau'))
-            self.w = self.v * math.tan(self.steer) / L     # rear: v = 뒷축 속도 → 명령 w 가 그대로 방향 변화율 (잘리지 않으면)
+            # 빠를수록 덜 돎 (현수막·타이어 옆 미끄럼): 실제 곡률 = tanδ / L / (1 + k v²)
+            self.w = self.v * math.tan(self.steer) / L / (1.0 + g('ack_understeer_k') * self.v * self.v)
         else:
             self.w += (wc - self.w) * min(1.0, dt / g('tau_w'))
         # 바퀴 헛돎: 빠른 제자리 회전이면 바퀴는 도는데 몸체는 덜 돎 (휠 odom 은 바퀴, IMU 는 몸체)
@@ -612,6 +636,11 @@ class Sim2D(Node):
             rx += self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
             ry += self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
             nx, ny = rx + hl * math.cos(nyaw), ry + hl * math.sin(nyaw)
+            sn = g('ack_slip_noise')
+            if sn > 0 and abs(self.v) > 1e-3:
+                # 바닥 (현수막 주름) 옆 미끄럼: 몸 옆으로 무작위 걸음 (휠 odom·IMU 는 모름). 표준편차 sn·|v|·√dt [m]
+                d_ = float(self.np_rng.normal(0.0, sn * abs(self.v) * math.sqrt(dt)))
+                nx, ny = nx - d_ * math.sin(nyaw), ny + d_ * math.cos(nyaw)
         else:
             nx = self.x + self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
             ny = self.y + self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
