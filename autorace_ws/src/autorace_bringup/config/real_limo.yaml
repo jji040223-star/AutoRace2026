@@ -26,6 +26,17 @@ mission_manager:
   ros__parameters:
     m7_cam_hfov_deg: 66.5
     m7_cam_yaw_deg: 0.26
+    # 아커만 (11-10) — 실차 측정 전엔 시뮬 기본값. 실차검증_아커만.md 의 측정 1·5 결과로 바꿈 (주차 쪽과 같은 값)
+    ack_min_radius_m: 0.47              # 최대 조향 원 반경 (뒷축 가운데, 좌우 중 큰 쪽)
+    ack_min_speed: 0.05                 # 실제로 움직이는 가장 작은 속도 + 0.01
+parking_controller:
+  ros__parameters:
+    ack_min_radius_m: 0.47              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
+    ack_min_speed: 0.05
+    inside_margin_m: 0.04               # 칸 안 판정 여유 — 줄자 vs 로그 차이 2 cm 넘으면 0.06~0.08
+odom_imu:
+  ros__parameters:
+    ack_ref_back_m: 0.1                 # 차 가운데 → 뒷축 (LIMO 축간 0.2 의 반)
 cmd_vel_mux:
   ros__parameters:
     stale_s: 0.5                        # 실차 차선 노드가 YOLO 와 같이 돌아 초당 7~18 장 → 0.3 s 끊김이 잦아 멈칫 (11-05). 0.5 s

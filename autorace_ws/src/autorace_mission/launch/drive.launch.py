@@ -46,7 +46,7 @@ def _actions(context):
     odom_topic = LaunchConfiguration('odom_topic').perform(context)
     ov = LaunchConfiguration('params').perform(context)
     OV = [p for p in ov.split(',') if p]        # 실차 보정값 등 — 모든 노드 기본 설정 위에 덮어씀 (노드 이름별 섹션)
-    odom = Node(package='autorace_mission', executable='odom_imu', name='odom_imu', output='screen', parameters=[common])
+    odom = Node(package='autorace_mission', executable='odom_imu', name='odom_imu', output='screen', parameters=OV + [common])
     common = dict(common, odom_topic=odom_topic)   # 우리 노드는 휠 거리 + IMU 방향 오도메트리를 씀 (실차 휠 오도메트리는 회전을 23 % 적게 잼)
     if odom_topic == '/odom_imu':
         common['imu_topic'] = '/imu_unbiased'      # odom_imu 가 멈춰 있을 때 잰 자이로 치우침을 뺀 IMU (mission·parking 의 자이로 적분)
