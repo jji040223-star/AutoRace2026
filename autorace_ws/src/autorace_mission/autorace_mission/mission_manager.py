@@ -195,6 +195,8 @@ class MissionManager(Node):
         p('ack_plan_radius_m', 0.52)       # 경로 계획에 쓰는 최소 반경 (조향 지연·오차 여유)
         p('m7_ack_d1_m', 0.25)             # 아커만 M7: 첫 원호 길이 (매 순간 다시 계획 — 이 원호의 곡률로 운전)
         p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
+        p('m8_ack_outer_bias_m', 0.05)     # 아커만 M8: 본 라바콘이 m8_ack_outer_bias_after 개 넘으면 (마지막 문들) 목표를 왼쪽으로 이만큼
+        p('m8_ack_outer_bias_after', 10)
         p('m8_ack_corner_assist', True)    # 아커만 M8 출구에서 차선 쌍이 안 보이면 최대 오른쪽으로 코너 보조
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
         p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
@@ -2312,6 +2314,11 @@ class MissionManager(Node):
             pb = 0.0
         if aim is not None:
             mx, my = aim
+            if self.ack() and g('m8_ack_outer_bias_m') > 0 and len(m['seen']) >= g('m8_ack_outer_bias_after'):
+                # 마지막 문 몇 개는 문 안에서 바깥쪽 (왼쪽 — 시계 방향 트랙이라 M8 뒤 코너는 늘 오른쪽) 으로 치우쳐 지남. curvy 배치는
+                # 마지막 문이 코너 안쪽으로 끝나 문 가운데를 따라가면 어떤 아커만 경로로도 코너 안쪽 선을 밟음 (2D 시뮬 11-09 b6,
+                # 다른 세션 분석). 문 폭 여유 ±0.085 m 안 — 콘 쓸기 검사는 그대로
+                my += g('m8_ack_outer_bias_m')
         elif cands:
             _, mx, my, gap = min(cands, key=lambda q: abs(wrap(q[0] - pb)) + 0.3 * q[1])
         if aim is not None or cands:
