@@ -9,9 +9,10 @@ ST=$PWD/${START:-start_full.yaml}
 P=${1:-o}
 # 강제 종료된 시뮬이 남긴 FastDDS 공유 메모리 (/dev/shm/fastrtps_*) 가 쌓이면 16 GB 가 차서 노드가 시작하자마자 죽음 (11-09 f 묶음)
 # → 어떤 프로세스도 매핑하지 않은 내 것만 지움
-cat /proc/[0-9]*/maps 2>/dev/null | grep -o "/dev/shm/[^ ]*" | sort -u > /tmp/.shm_used_$$
-for f in /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*; do
-  [ -O "$f" ] || continue; grep -qx "$f" /tmp/.shm_used_$$ && continue; rm -f -- "$f"
+# 매핑 (maps) + 열린 파일 (fd — 포트 잠금 파일 *_el 은 flock 만 하고 매핑 안 함) 둘 다 보고, 만든 지 1 분 넘은 것만 (다른 세션 검토)
+{ cat /proc/[0-9]*/maps 2>/dev/null | grep -o "/dev/shm/[^ ]*"; ls -l /proc/[0-9]*/fd 2>/dev/null | grep -o "/dev/shm/[^ ]*"; } | sort -u > /tmp/.shm_used_$$
+find /dev/shm -maxdepth 1 -user "$USER" \( -name 'fastrtps_*' -o -name 'sem.fastrtps_*' \) -mmin +1 2>/dev/null | while read -r f; do
+  grep -qx "$f" /tmp/.shm_used_$$ && continue; rm -f -- "$f"
 done; rm -f /tmp/.shm_used_$$
 i=0
 # CDEF=1 이면 s1~s4 를 라바콘 공식 배치 (default, USD S자) 로
