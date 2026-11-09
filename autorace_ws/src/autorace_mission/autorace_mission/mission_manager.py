@@ -200,7 +200,7 @@ class MissionManager(Node):
         p('m8_ack_arc_m', 0.35)            # 아커만 M8: 원호 검사 길이
         p('m7_ack_n', 11)                  #   곡률 후보 수 (−1/R ~ +1/R)
         p('m7_ack_w_lat', 2.0)             #   비용: 끝 자리 옆 오차 [1/m]
-        p('m7_ack_w_head', 0.8)            #   비용: 끝 방향 오차 [1/rad]
+        p('m7_ack_w_head', 0.15)           #   비용: 끝 방향 오차 [1/rad] (옆 오차는 펴는 거리까지 투영해서 봄 → 작게)
         p('m7_ack_w_free', 3.0)            #   비용: 둘째 원호에서 막혀 못 가는 길이 [1/m]
         p('m7_ack_max_psi_deg', 70.0)      #   차로 방향과 이보다 틀어지는 경로는 안 씀
         p('m7_speed', 0.15)
@@ -1202,7 +1202,11 @@ class MissionManager(Node):
                 if fl < d1:
                     continue                    # 첫 원호에서 닿음 — 이 곡률로는 못 감
                 se, le, pe = P[-1] if not bad.any() else P[max(0, np.argmax(bad) - 1)]
-                cost = (g('m7_ack_w_lat') * abs(le - lt) + g('m7_ack_w_head') * abs(pe)
+                # 투영 옆 오차: 끝 자세에서 최소 반경으로 펴면 옆으로 R·(1 − cos ψ) 더 감 — 끝 방향 자체를 벌하면 S 자 가운데
+                # (방향이 클 수밖에 없음) 를 늘 손해로 봐서 '안 꺾는 쪽' 이 이김 (2D 시뮬 11-09 i1: +15° 로 들어와 왼쪽 차로로 가야 하는데
+                # 방향만 펴다 첫 줄 LIMO 에 비스듬히 끼임, 다른 세션 검토)
+                lp = le + math.copysign(g('ack_plan_radius_m') * (1.0 - math.cos(pe)), pe)
+                cost = (g('m7_ack_w_lat') * abs(lp - lt) + g('m7_ack_w_head') * abs(pe)
                         + g('m7_ack_w_free') * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
                 if best is None or cost < best[0]:
                     best = (cost, k1, k2, fl)

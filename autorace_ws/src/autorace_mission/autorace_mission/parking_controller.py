@@ -115,7 +115,9 @@ class ParkingController(Node):
         # 들어간 만큼 후진한 뒤 후진 원호로 차로 가운데로 나온다 (ARC_OUT). 원호 중에는 남은 거리로 반경을 다시 계산
         p('drive_mode', 'diff')            # diff | ackermann
         p('ack_min_radius_m', 0.47)        # 최소 회전 반경 (limo_base 가 자르는 값)
-        p('ack_park_radius_m', 0.50)       # 들어가기 원호 계획 반경 (칸 가운데 − 이만큼 앞에서 꺾기 시작)
+        p('ack_park_margin_m', 0.08)       # 들어가기 원호 계획 반경 = 최소 반경 + 이만큼 (칸 가운데 − 계획 반경 앞에서 꺾기 시작).
+                                           # 원호 중 r = Δu/(1−sinθ) 로 다시 계산할 때 조일 여유 — 0.03 (0.50) 이면 실제가 조금만 덜 돌아도
+                                           # 못 되돌림 (다른 세션 검토 11-09). 실차 최소 반경은 재서 ack_min_radius_m 에
         p('ack_arc_speed', 0.08)
         p('ack_arc_end_deg', 2.0)          # 90° 에서 이만큼 안이면 원호 끝
         p('exit_speed', 0.09)
@@ -432,7 +434,16 @@ class ParkingController(Node):
             self.set_state('FAIL', f'막힘 {why} — 재시도 {self.retry - 1} 번 넘음, 멈춤')
             self.get_logger().error('[M4] 주차 실패 — 멈춤')
             return True
-        if self.state in ('ENTER', 'CHECK', 'HOLD', 'FIX'):
+        if self.state == 'ARC_IN':
+            # 아커만 원호 중 막힘: 돈 채로 ALIGN 으로 가면 h0 축 거리만 보고 비스듬히 옆 LIMO 쪽으로 감 (다른 세션 검토 11-09) →
+            # 원호를 되감아 (후진 원호) 차로로 나온 뒤 정렬부터
+            self.arc_then = 'ALIGN'
+            self.set_state('ARC_OUT', f'막힘: {why} → 원호 되감아 차로로 나와 정렬부터 ({self.retry} 번째)')
+        elif self.state == 'ARC_OUT':
+            # 후진 원호 중 막힘 (뒤 장애물): 반대 조향으로 짧게 전진했다가 다시 후진 원호
+            self.fwd_from = self.pose[:2]
+            self.set_state('ARC_FWD', f'막힘: {why} → 짧게 전진 후 다시 후진 원호 ({self.retry} 번째)')
+        elif self.state in ('ENTER', 'CHECK', 'HOLD', 'FIX'):
             self.exit_to = 'ALIGN'
             self.set_state('EXIT', f'막힘: {why} → 빠져나와 정렬부터 ({self.retry} 번째)')
         elif self.bay is None:
@@ -490,6 +501,10 @@ class ParkingController(Node):
             self.do_arc_in(now)
         elif s == 'ARC_OUT':
             self.do_arc_out(now)
+        elif s == 'ARC_FWD':
+            self.do_arc_fwd(now)
+        elif s == 'LANE_FIX':
+            self.do_lane_fix(now)
         elif s == 'MEASURE':
             self.do_measure(now)
         elif s == 'ENTER':
@@ -626,11 +641,11 @@ class ParkingController(Node):
             return
         err = self.bay['along'] - self.along()
         if self.ack():
-            err -= g('ack_park_radius_m')    # 아커만: 칸 가운데 − 반경 자리에서 원호 시작
+            err -= self.park_r()             # 아커만: 칸 가운데 − 계획 반경 자리에서 원호 시작
         if abs(err) < g('align_tol_m') and abs(self.speed) < 0.01 and self.ack():
             self.pub(0.0, 0.0)
             self.lat_ref = self.lateral()    # 차로 가운데 (나올 때 여기로)
-            self.set_state('ARC_IN', f'원호 시작 자리 (칸 가운데 {g("ack_park_radius_m"):.2f} m 앞, 오차 {err * 100:+.1f} cm) → '
+            self.set_state('ARC_IN', f'원호 시작 자리 (칸 가운데 {self.park_r():.2f} m 앞, 오차 {err * 100:+.1f} cm) → '
                                      f'전진 원호 {"오른쪽" if self.sgn < 0 else "왼쪽"} 90°')
             return
         if abs(err) < g('align_tol_m') and abs(self.speed) < 0.01:
@@ -650,6 +665,8 @@ class ParkingController(Node):
         if abs(err) < g('align_tol_m'):
             v = 0.0
         w = 1.5 * wrap(self.h0 - self.heading())
+        if self.ack() and v == 0.0:
+            w = 0.0                          # 아커만: 서서 w 만 주면 바퀴만 꺾이고 안 돎 → 막힘 감시가 거짓으로 잡음 (다른 세션 검토)
         if self.stuck(now, abs(v), w):
             return
         self.pub(v, max(-0.3, min(0.3, w)))
@@ -696,6 +713,10 @@ class ParkingController(Node):
     def ack(self):
         return self.get_parameter('drive_mode').value == 'ackermann'
 
+    def park_r(self):
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        return g('ack_min_radius_m') + g('ack_park_margin_m')
+
     def turned(self):
         """처음 방향에서 칸 쪽으로 돈 각 [rad] (0 = 진행 방향, 90° = 칸 축)."""
         return self.sgn * wrap(self.heading() - self.h0)
@@ -741,6 +762,13 @@ class ParkingController(Node):
             self.result_pub.publish(String(data=self.result))
             self.done_pub.publish(Empty())
             return
+        if d <= 0.0:
+            # 실제 반경이 계획보다 커서 θ 가 남은 채 차로 가운데에 먼저 닿음 — 그대로 후진하면 차로 반대편 선으로 넘어감
+            # (다른 세션 검토 11-09: 반경 0.65 면 ~15 cm) → 전진하며 차로 가운데선에 맞추고 끝
+            self.pub(0.0, 0.0)
+            self.fix_t0 = now
+            self.set_state('LANE_FIX', f'후진 원호가 차로 가운데에 먼저 닿음 (남은 방향 {math.degrees(th):+.1f}°) → 전진하며 차로에 맞춤')
+            return
         den = 1.0 - math.cos(th)
         r = d / den if den > 1e-3 and d > 0 else g('ack_min_radius_m')
         r = max(g('ack_min_radius_m'), min(3.0, r))
@@ -748,6 +776,46 @@ class ParkingController(Node):
         w = -self.sgn * abs(v) / r            # 칸 쪽으로 돈 것을 되돌림
         self.arc_log('out', f'후진 원호: 돈 각 {math.degrees(th):.0f}°, 차로 가운데까지 깊이 {d:.2f} m → 반경 {r:.2f} m')
         if self.stuck(now, abs(v), w):
+            return
+        self.pub(v, w)
+
+    def do_arc_fwd(self, now):
+        """ARC_OUT 이 뒤에서 막힘: 칸 쪽 반대 조향으로 0.08 m 전진 (방향을 조금 되돌림) 뒤 다시 ARC_OUT."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        if math.dist(self.fwd_from, self.pose[:2]) >= 0.08 or now - self.phase_t > 3.0:
+            self.pub(0.0, 0.0)
+            self.set_state('ARC_OUT', '짧게 전진 끝 → 다시 후진 원호')
+            return
+        v = g('ack_arc_speed')
+        w = -self.sgn * v / g('ack_min_radius_m')      # 전진하며 칸 쪽으로 돈 각을 줄이는 쪽
+        if self.stuck(now, v, w):
+            return
+        self.pub(v, w)
+
+    def do_lane_fix(self, now):
+        """차로 가운데선 (lat_ref, 처음 방향 h0) 위 앞 점 pure pursuit 로 전진 — 방향 4° 안·옆 3 cm 안 이면 (또는 0.6 m / 6 s) 끝."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        lat = self.lateral() - getattr(self, 'lat_ref', 0.0)            # 차로 가운데에서 왼쪽 +
+        herr = wrap(self.heading() - self.h0)
+        if (abs(herr) < math.radians(4.0) and abs(lat) < 0.03) or now - self.fix_t0 > 6.0:
+            self.pub(0.0, 0.0)
+            self.rot_err['out'] = math.degrees(self.turned())
+            self.result += (f', 나올 때 방향 오차 (IMU) {self.rot_err["out"]:+.1f}°, 차로 가운데에서 {self.sgn * lat * 100:+.1f} cm '
+                            f'(차로 맞추기 {now - self.fix_t0:.1f} s), 전체 {now - self.t0:.1f} s')
+            self.set_state('DONE', self.result)
+            self.result_pub.publish(String(data=self.result))
+            self.done_pub.publish(Empty())
+            return
+        look = 0.35
+        # 차 좌표로 본 (차로 가운데선 위, 지금 위치에서 look 앞) 점
+        # 처음 방향 좌표 (앞 +, 왼쪽 +) 로 차 → 목표점 = (look, −lat) 을 차 좌표로 (방향 herr 만큼 되돌림)
+        ax = look * math.cos(herr) - lat * math.sin(herr)
+        ay = -look * math.sin(herr) - lat * math.cos(herr)
+        kap = 2.0 * ay / max(1e-3, ax * ax + ay * ay)
+        kmax = 1.0 / g('ack_min_radius_m')
+        v = g('ack_arc_speed')
+        w = v * max(-kmax, min(kmax, kap))
+        if self.stuck(now, v, w):
             return
         self.pub(v, w)
 
@@ -784,8 +852,9 @@ class ParkingController(Node):
         if pt is not None:
             boxes = avoid.scan_boxes(pt, 0.0, 0.0, 0.0, reach=0.8)
             if avoid.free(0.0, 0.0, 0.0, boxes, max(0.05, remain), 0.01) < min(remain, 0.05):
-                self.pub(0.0, w * 0.5)
-                if self.stuck(now, v, w):
+                wb = 0.0 if self.ack() else w * 0.5
+                self.pub(0.0, wb)
+                if self.stuck(now, 0.0 if self.ack() else v, wb if self.ack() else w):
                     return
                 return
         if self.stuck(now, v, w):
