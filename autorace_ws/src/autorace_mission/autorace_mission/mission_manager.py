@@ -201,7 +201,7 @@ class MissionManager(Node):
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
         p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
         p('m8_ack_assist_axis_deg', 12.0)  #   트랙 축 (주차 직선 방향) 에서 이 안이면 보조 끝
-        p('m8_ack_assist_s', 3.0)          #   길어야 이만큼
+        p('m8_ack_assist_s', 6.0)          #   길어야 이만큼 (반경 0.47 로 90° = 0.74 m, 0.15 m/s 면 4.9 s — 3 s 면 늘 시간으로 끝났음, 다른 세션)
         p('m8_ack_exit_deg', 15.0)         # 아커만 M8 출구: 방향이 이 안이면 (옆 오차 무시) 바로 차선 추종에 넘김
         p('m8_ack_exit_s', 1.0)            #   길어야 이만큼
         p('m8_ack_arcs', False)            # 아커만 M8: 원호 후보로 고르기 (2D 시뮬 11-09 j: 매 순간 0.35 m 만 봐서 휜 통로 앞에서 막혀
