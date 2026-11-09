@@ -216,6 +216,7 @@ class MissionManager(Node):
         p('m7_kv', 1.0)                    # 앞 장애물까지 거리 비례 감속 [1/s]
         p('m7_stop_gap_m', 0.07)           # 쓸기 검사 거리 (차 + m7_margin_m) 가 이보다 짧으면 그 방향으로 안 감
         p('m7_avoid_far_side', True)      # M2: 표지판 반대쪽 끝 차로 (A 면 2, B 면 0) 는 다른 후보가 없을 때만
+        p('m7_ack_back_lidar_free_m', 0.25) # 아커만 후진: 뒤 라이다가 이만큼 비었으면 뒤 기억 장애물은 무시
         p('m7_ack_final_ignore_lock', True)  # 아커만: 갈림길 잠금 (표지판 45 px, 분리대 1.3~1.8 m 앞) 뒤에도 마지막 차로 옮기기 — 아커만은
                                            # 차로 변경이 느려 잠금이 먼저 걸려 가운데 차로로 끝남 (2D 시뮬 11-09 d4·d8 M2 실패). S 자 0.9 m 는 들어감
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
@@ -1654,9 +1655,12 @@ class MissionManager(Node):
             rf = self.rear_free()
             mem = self.m7_free(sc, lc, psi, near, 0.06, -1.0)
             bm = bk.get('m', g('m7_back_m'))
+            # 아커만: 뒤 라이다가 비었으면 뒤 기억 장애물 (뎁스 기억 — 지나온 상자가 크게 남음) 로는 후진을 안 멈춤. 아커만은 제자리 회전이
+            # 없어 후진이 유일한 회복인데, 0 cm 도 못 물러나고 같은 회복을 3 번 반복해 멈춤 (2D 시뮬 11-09 x5_4, 다른 세션)
+            mem_block = mem < 0.06 and not (self.ack() and rf is not None and rf >= g('m7_ack_back_lidar_free_m'))
             why = ('끝' if moved >= bm else '시간 초과' if now - bk['t'] > g('m7_back_timeout_s') * bm / g('m7_back_m')
                    else f'뒤 라이다 {rf:.2f} m' if rf is not None and rf < g('m7_back_lidar_m')
-                   else '뒤 기억 장애물' if mem < 0.06 else None)
+                   else '뒤 기억 장애물' if mem_block else None)
             if why is None:
                 self.m7_mode('back', '후진 중')
                 w_b = 0.0
