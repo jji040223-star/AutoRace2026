@@ -267,6 +267,7 @@ class ParkingController(Node):
         m = Twist()
         m.linear.x, m.angular.z = float(v), float(w)
         self.cmd_pub.publish(m)
+        self.last_cmd = (float(v), float(w))
 
     def pts(self):
         if self.scan is None or self.now() - self.scan[0] > 0.5:
@@ -493,7 +494,8 @@ class ParkingController(Node):
             # 들어온 길 기록 (되짚어 나올 때) + 네 모서리가 다 칸 안이면 바로 멈춤
             tr = getattr(self, 'trace', None)
             if tr is not None:
-                p_ = (self.pose[0], self.pose[1], self.heading())
+                lc = getattr(self, 'last_cmd', (0.0, 0.0))
+                p_ = (self.pose[0], self.pose[1], self.heading(), lc[1] / lc[0] if abs(lc[0]) > 0.02 else None)   # 그때 명령한 곡률
                 if math.dist(tr[-1][:2], p_[:2]) >= 0.005:
                     tr.append(p_)
             if self.state in ('ARC_IN', 'ENTER'):
@@ -693,7 +695,7 @@ class ParkingController(Node):
         if abs(err) < g('align_tol_m') and abs(self.speed) < 0.01 and self.ack():
             self.pub(0.0, 0.0)
             self.lat_ref = self.lateral()    # 차로 가운데 (나올 때 여기로)
-            self.trace = [(self.pose[0], self.pose[1], self.heading())]   # 들어온 길 (RETRACE 가 거꾸로 따라감)
+            self.trace = [(self.pose[0], self.pose[1], self.heading(), None)]   # 들어온 길 (RETRACE 가 거꾸로 따라감)
             self.set_state('ARC_IN', f'원호 시작 자리 (칸 가운데 {self.park_r():.2f} m 앞, 오차 {err * 100:+.1f} cm) → '
                                      f'전진 원호 {"오른쪽" if self.sgn < 0 else "왼쪽"} 90°')
             return
@@ -837,18 +839,29 @@ class ParkingController(Node):
     def rt_build(self):
         """기록한 들어온 길 → 구간별 (길이, 곡률). 되짚기는 끝 구간부터 거꾸로."""
         # 5 cm 간격으로 솎음 — 5 mm 간격 방향 차로 곡률을 구하면 IMU 잡음 0.1° 에 κ 잡음 ~0.35 /m (실차 IMU 는 더 거침, 다른 세션)
-        tr = [self.trace[0]]
+        # 곡률은 들어올 때 '명령한' 값을 그대로 다시 냄 (같은 명령 → 같은 실제 곡률). 실제 움직임으로 잰 곡률을 명령으로 내면
+        # 조향 배율 (실차 덜 꺾임) 이 한 번 더 곱해져 덜 펴짐 (2D 시뮬 11-10 g2: 조향 0.85 에서 끝 방향 −12°, 다른 세션)
+        tr, ks = [self.trace[0]], [[]]
         for p_ in self.trace[1:]:
+            if p_[3] is not None:
+                ks[-1].append(p_[3])
             if math.dist(tr[-1][:2], p_[:2]) >= 0.05:
                 tr.append(p_)
+                ks.append([])
         if tr[-1] is not self.trace[-1]:
             tr.append(self.trace[-1])
+        else:
+            ks.pop()
         segs = []
-        for a, b in zip(tr, tr[1:]):
+        for (a, b), kc in zip(zip(tr, tr[1:]), ks):
             ds = math.dist(a[:2], b[:2])
             fwd = (b[0] - a[0]) * math.cos(a[2]) + (b[1] - a[1]) * math.sin(a[2]) >= 0.0   # 전진으로 지난 구간인가
-            k = wrap(b[2] - a[2]) / ds if ds > 1e-4 else 0.0
-            segs.append((ds, k if fwd else -k, fwd))
+            if kc:
+                k = float(np.mean(kc))       # 명령 곡률 (전진·후진 모두 dθ/ds_부호 — 아래 w = k·v 에 그대로)
+            else:
+                k = wrap(b[2] - a[2]) / ds if ds > 1e-4 else 0.0
+                k = k if fwd else -k
+            segs.append((ds, k, fwd))
         self.rt = {'segs': segs[::-1], 'total': sum(s[0] for s in segs), 'done': 0.0, 'last': self.pose[:2]}
 
     def do_retrace(self, now):
