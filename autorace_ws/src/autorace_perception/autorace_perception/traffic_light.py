@@ -82,6 +82,7 @@ class TrafficLightNode(Node):
         p('cam_x', 0.084)                  # base_link → 카메라 [m]
         p('track_radius_m', 0.35)
         p('track_min', 3)                  # 크기까지 확인한 박스가 이만큼 모이면 위치 검사 시작
+        p('track_reset_frames', 10)        # 크기는 맞는데 위치만 벗어난 프레임이 이만큼 이어지면 위치 기억을 지움
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.K = None
         self._dets = collections.deque(maxlen=30)     # (시각, DetectionArray)
@@ -133,12 +134,14 @@ class TrafficLightNode(Node):
             if ((lx - x) * math.cos(yaw) + (ly - y) * math.sin(yaw) < -g('line_keep_m')
                     or dyaw > math.radians(g('line_turn_deg'))):
                 self._line = None          # 지나간 선, 또는 방향이 바뀐 (다른 도로의) 선 — 라바콘 직선 끝 정지선을 2차로까지 들고 왔었다
+                self.clear_track('정지선 기준이 끝남')
         if msg.stop_line_dist_m <= 0:
             return
         d = g('cam_x') + msg.stop_line_dist_m
         pt = (x + d * math.cos(yaw), y + d * math.sin(yaw), yaw)
         if self._line is None:
             self._line = pt + (g('light_beyond_m'),)          # 처음 본 선 = 서행 구간 정지선 (신호등 1.65 m 앞)
+            self.clear_track('새 정지선')
         elif math.dist(pt[:2], self._line[:2]) < g('line_match_m'):
             self._line = pt + (self._line[3],)
         else:
@@ -158,6 +161,14 @@ class TrafficLightNode(Node):
                     self._last_log = self.get_clock().now().nanoseconds * 1e-9
                     self.get_logger().info(f'[traffic_light] 다른 가로선 (첫 선에서 {gap:.2f} m, 기대 {g("line_gap_m"):.2f} ± '
                                            f'{g("line_gap_tol_m"):.2f}) — 기준 안 옮김')
+
+    def clear_track(self, why):
+        """신호등 위치 기억은 정지선 기준 하나에 묶음 — 다른 곳 (M3 횡단보도 근처 모니터 그림 등) 에서 크기가 맞아 쌓인 위치를
+        한 바퀴 내내 들고 있으면 진짜 신호등을 '위치 벗어남' 으로 다 버림 (2D 시뮬 아커만 a2: 0.38~0.43 m 벗어남 → M1·주차 안 켜짐)."""
+        if self._track:
+            self.get_logger().info(f'[traffic_light] 신호등 위치 기억 {len(self._track)} 개 지움 ({why})')
+        self._track = []
+        self._pos_rej = 0
 
     def expected_dist(self, pose):
         """카메라 → 신호등 예상 거리 (정지선을 봤을 때만), 아니면 None. 가설이 둘이면 첫째 (지금 기준선)."""
@@ -239,6 +250,7 @@ class TrafficLightNode(Node):
         def exp_err(dist):
             return min(abs(dist - e) for e in d_exps)
         ok, bad = [], []
+        pos_rej = 0
         for d in boxes:
             bw, bh = d.x2 - d.x1, d.y2 - d.y1
             cl = self.cells(bgr, d)
@@ -290,8 +302,13 @@ class TrafficLightNode(Node):
                 ty = float(np.median([p[1] for p in self._track]))
                 if math.dist(wp, (tx, ty)) > g('track_radius_m'):
                     bad.append((d, f'위치 {math.dist(wp, (tx, ty)):.2f} m 벗어남'))
+                    pos_rej += 1
                     continue
             ok.append((d, lit, contrast, dist, wp))
+        # 크기까지 맞는데 위치만 계속 어긋나면 기억한 위치가 틀린 것 (다른 물체·오도메트리 흐름) → 지우고 새로 모음
+        self._pos_rej = 0 if ok else (getattr(self, '_pos_rej', 0) + 1 if pos_rej else getattr(self, '_pos_rej', 0))
+        if self._pos_rej >= g('track_reset_frames'):
+            self.clear_track(f'크기는 맞는데 위치만 {self._pos_rej} 장 연속 벗어남')
         # 같은 자리 (IoU ≥ 0.5) 에 색이 다른 박스가 둘 다 남으면 신뢰도가 높은 것만 (YOLO 가 한 신호등에 두 클래스를 낼 때)
         def iou(a, b):
             ix = max(0, min(a.x2, b.x2) - max(a.x1, b.x1))
