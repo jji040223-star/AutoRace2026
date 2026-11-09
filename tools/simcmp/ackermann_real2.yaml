@@ -1,0 +1,21 @@
+# 아커만 실차 가정 2 (ackermann_real 위에 더 가혹하게 — 값은 추정, 실차 측정 전 '버티나' 시험용. 다른 세션 b06644f 의 sim2d 옵션)
+sim2d:
+  ros__parameters:
+    drive_mode: ackermann
+    ack_steer_scale: 0.85          # 덜 꺾임 (최소 반경 ≈ 0.56)
+    steer_tau: 0.15                # 서보 지연
+    ack_steer_bias_deg: 1.5        # 서보 가운데 어긋남
+    ack_steer_scale_left: 1.0      # 좌우 비대칭 (오른쪽 — 주차 칸 쪽 — 이 더 덜 꺾임)
+    ack_steer_scale_right: 0.9
+    ack_steer_backlash_deg: 2.0    # 조향 유격
+    ack_understeer_k: 3.0          # 빠를수록 덜 돎 (곡률 ÷ (1 + k v²))
+    ack_slip_noise: 0.05           # 현수막 주름 옆 미끄럼 (odom·IMU 모름)
+    cmd_latency_s: 0.08            # 명령 지연
+    v_deadband: 0.04               # 저속 정지마찰
+    odom_v_scale: 0.97             # 휠 거리 오차
+mission_manager:
+  ros__parameters:
+    drive_mode: ackermann
+parking_controller:
+  ros__parameters:
+    drive_mode: ackermann
