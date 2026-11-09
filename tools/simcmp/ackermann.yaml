@@ -1,0 +1,10 @@
+# 아커만 시험: 시뮬 차 움직임 + 미션·주차 노드 (run.sh 의 sim_params·params 양쪽에 넣음)
+sim2d:
+  ros__parameters:
+    drive_mode: ackermann
+mission_manager:
+  ros__parameters:
+    drive_mode: ackermann
+parking_controller:
+  ros__parameters:
+    drive_mode: ackermann

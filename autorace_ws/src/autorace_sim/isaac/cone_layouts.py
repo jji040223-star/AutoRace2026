@@ -35,9 +35,11 @@ def positions(name, base, rng=None):
     elif name == "s":
         b["sway"] = 0.16
     elif name == "curvy":
-        b["sway"], b["sway_period"] = 0.20, 1.5
+        # 11-09: 0.20 / 1.5 → 0.18 / 1.8 — 통로 가운데선 최소 반경 0.28 m 는 아커만 (최소 반경 0.47 m) 으로 못 지남 (여유 −0.5 cm).
+        # 0.18 / 1.8 = 가운데선 반경 0.46 m, 여유 약 6 cm. 공식 (default 0.12 / 1.8) 보다 1.5 배 휨 (악조건 시험)
+        b["sway"], b["sway_period"] = 0.18, 1.8
     elif name == "curvy_m":
-        b["sway"], b["sway_period"] = -0.20, 1.5
+        b["sway"], b["sway_period"] = -0.18, 1.8
     elif name == "tight":
         b["sway"], hg0, hg1 = 0.18, 0.20, 0.20
     elif name == "narrow":

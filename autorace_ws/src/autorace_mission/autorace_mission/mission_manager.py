@@ -189,6 +189,20 @@ class MissionManager(Node):
         p('m7_block_m', 1.2)               # 내 차로 앞이 이 거리 안에서 막히면 갈 차로를 정한다 (실제로 꺾는 때는 쓸기 검사가 정함)
         p('m7_enter_window_m', 0.30)       # 옆 차로 후보: 막은 장애물 앞면 이만큼 앞 ~ 뒷면 + 0.15 m 가 그 차로에서 비어 있어야 (차 길이쯤 — 꺾는 때는 쓸기 검사가 정함)
         p('m7_max_yaw_rate', 0.25)         # [rad/s] 이보다 빨리 돌고 있으면 (코너) 켜지 않음 — 차로 방향을 잘못 잡는다
+        # 구동 방식: diff (네 바퀴 차동 — 제자리 회전) | ackermann (앞바퀴 조향 — 제자리 회전 없음, 최소 회전 반경)
+        p('drive_mode', 'diff')
+        p('ack_min_radius_m', 0.47)        # 아커만 최소 회전 반경 (차 중심) — limo_base 가 이보다 작은 반경은 잘라냄
+        p('ack_plan_radius_m', 0.52)       # 경로 계획에 쓰는 최소 반경 (조향 지연·오차 여유)
+        p('m7_ack_d1_m', 0.25)             # 아커만 M7: 첫 원호 길이 (매 순간 다시 계획 — 이 원호의 곡률로 운전)
+        p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
+        p('m8_ack_arcs', False)            # 아커만 M8: 원호 후보로 고르기 (2D 시뮬 11-09 j: 매 순간 0.35 m 만 봐서 휜 통로 앞에서 막혀
+                                           # 후진 8~17 번 → 끔, 예전 틈 가운데 추종 + 조향 후진·출구 추종만)
+        p('m8_ack_arc_m', 0.35)            # 아커만 M8: 원호 검사 길이
+        p('m7_ack_n', 11)                  #   곡률 후보 수 (−1/R ~ +1/R)
+        p('m7_ack_w_lat', 2.0)             #   비용: 끝 자리 옆 오차 [1/m]
+        p('m7_ack_w_head', 0.8)            #   비용: 끝 방향 오차 [1/rad]
+        p('m7_ack_w_free', 3.0)            #   비용: 둘째 원호에서 막혀 못 가는 길이 [1/m]
+        p('m7_ack_max_psi_deg', 70.0)      #   차로 방향과 이보다 틀어지는 경로는 안 씀
         p('m7_speed', 0.15)
         p('m7_change_speed', 0.10)         # 차로 바꾸는 동안 — 앞으로 덜 가면서 옆으로 빠지게
         p('m7_kv', 1.0)                    # 앞 장애물까지 거리 비례 감속 [1/s]
@@ -1141,6 +1155,69 @@ class MissionManager(Node):
         return gr['phase'] + (gr['n_left'] - k) * self.get_parameter('m7_lane_width_m').value
 
     # ---------------------------------------------------------------- M7 운전: 차 사각형 쓸기 검사
+    def ack(self):
+        return self.get_parameter('drive_mode').value == 'ackermann'
+
+    @staticmethod
+    def ack_poses(s0, l0, p0, segs, step=0.025):
+        """(s0, l0, p0) 에서 [(곡률, 길이), ...] 원호를 차례로 갈 때 자세들 (N, 3) 과 각 자세까지 거리."""
+        P, D = [], []
+        s, l, p, dist = s0, l0, p0, 0.0
+        for kap, ln in segs:
+            n = max(1, int(round(ln / step)))
+            ds = ln / n
+            for _ in range(n):
+                if abs(kap) < 1e-6:
+                    s, l = s + ds * math.cos(p), l + ds * math.sin(p)
+                else:
+                    p2 = p + kap * ds
+                    s, l = s + (math.sin(p2) - math.sin(p)) / kap, l - (math.cos(p2) - math.cos(p)) / kap
+                    p = p2
+                dist += ds
+                P.append((s, l, p))
+                D.append(dist)
+        return np.array(P), np.array(D)
+
+    def m7_ack_step(self, sc, lc, psi, lt, k, near, changing):
+        """아커만 M7 한 번: 곡률 후보 (κ1, κ2) 마다 첫 원호 d1 → 둘째 원호 d2 를 굴려 보고 (매 순간 다시 계획 — 조향 지연은
+        ack_plan_radius_m 여유로), 첫 원호가 안 닿는 것 중 비용 (끝 옆 오차·방향 오차·둘째 원호에서 막히는 길이) 이 가장 작은 것.
+        돌려줌: v, w (= v·κ1), 막힘 여부, 막힘 로그."""
+        g = lambda k_: self.get_parameter(k_).value   # noqa: E731
+        kmax = 1.0 / g('ack_plan_radius_m')
+        K = np.linspace(-kmax, kmax, int(g('m7_ack_n')))
+        d1, d2 = g('m7_ack_d1_m'), g('m7_ack_d2_m')
+        boxes = avoid.escape((sc, lc, psi), list(near)) or []   # 이미 닿은 상자 (기억 오차) 는 빼고 — 빠져나가는 길도 고르게
+        mg = np.full(len(boxes), g('m7_margin_m'))
+        pmax = math.radians(g('m7_ack_max_psi_deg'))
+        best = None
+        free1 = []
+        for k1 in K:
+            for k2 in K:
+                P, D = self.ack_poses(sc, lc, psi, [(k1, d1), (k2, d2)])
+                hit = avoid.hits(P, boxes, mg).any(axis=1) if boxes else np.zeros(len(P), bool)
+                bad = hit | (np.abs(P[:, 2]) > pmax)
+                fl = float(D[np.argmax(bad)] - D[0]) if bad.any() else float(D[-1])
+                if k2 == K[len(K) // 2]:
+                    free1.append((k1, fl))
+                if fl < d1:
+                    continue                    # 첫 원호에서 닿음 — 이 곡률로는 못 감
+                se, le, pe = P[-1] if not bad.any() else P[max(0, np.argmax(bad) - 1)]
+                cost = (g('m7_ack_w_lat') * abs(le - lt) + g('m7_ack_w_head') * abs(pe)
+                        + g('m7_ack_w_free') * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
+                if best is None or cost < best[0]:
+                    best = (cost, k1, k2, fl)
+        if best is None:
+            msg = '갈 원호 없음 (아커만, 첫 원호에서 닿음): ' + ', '.join(f'κ {k1:+.1f} {fl:.2f} m' for k1, fl in free1)
+            return 0.0, 0.0, True, msg
+        _, k1, k2, fl = best
+        vmax = g('m7_change_speed') if (changing or abs(k1) > 0.3 * kmax) else g('m7_speed')
+        v = min(vmax, g('m7_kv') * (fl - g('m7_stop_gap_m')))
+        v = max(v, 0.04) if fl >= d1 else 0.0
+        kind = 'straight' if abs(k1) < 0.15 * kmax else 'arc'
+        self.m7_mode(f'{kind}{k}', f'{"직진" if kind == "straight" else "원호"} κ {k1:+.2f} → {k2:+.2f} (반경 '
+                                   f'{"∞" if abs(k1) < 1e-6 else f"{1 / abs(k1):.2f}"} m, 빈 길이 {fl:.2f} m, 차로 {k})')
+        return v, v * k1, False, None
+
     def m7_free(self, sc, lc, h, boxes, dmax, dirn=1.0):
         return avoid.free(sc, lc, h, boxes, dmax, self.get_parameter('m7_margin_m').value, dirn)
 
@@ -1418,6 +1495,9 @@ class MissionManager(Node):
             self.m7_publish(0.0, 0.0)
             return
         # 1) 들어가자마자 IMU 방향으로 차로 방향 정렬 (제자리) — 비스듬한 채로 차로를 판단하지 않게
+        if m['align'] is not None and self.ack():
+            self.get_logger().info(f'[M7] 아커만 — 제자리 정렬 생략 (방향 오차 {math.degrees(psi):+.1f}° 는 원호 경로로 맞춤)')
+            m['align'] = None
         if m['align'] is not None:
             done = abs(psi) < math.radians(g('m7_align_deg')) and abs(wz) < 0.1
             late = now - m['align'] > g('m7_align_timeout_s')
@@ -1442,11 +1522,17 @@ class MissionManager(Node):
                    else '뒤 기억 장애물' if mem < 0.06 else None)
             if why is None:
                 self.m7_mode('back', '후진 중')
-                self.m7_publish(-g('m7_back_speed'), 0.0)
+                w_b = 0.0
+                if self.ack():
+                    # 아커만: 곧게 후진하면 방향이 그대로라 같은 자리에 다시 낀다 (2D 시뮬 11-09 c3: 14° 틀어진 채 첫 줄 LIMO 와
+                    # 바깥 벽 사이에 끼어 후진 3 번 모두 실패) → 후진하면서 차로 방향 쪽으로 편다 (후진이라 w 부호 = 방향 줄이는 쪽)
+                    vb = g('m7_back_speed')
+                    w_b = max(-vb / g('ack_plan_radius_m'), min(vb / g('ack_plan_radius_m'), -2.0 * vb * psi / 0.3))
+                self.m7_publish(-g('m7_back_speed'), w_b)
                 return
             m['back'] = None
             m['rechoose'] = True
-            m['probe_req'] = bool(g('m7_probe'))
+            m['probe_req'] = bool(g('m7_probe')) and not self.ack()   # 탐색은 제자리에서 돌아 방향을 잡음 — 아커만은 생략
             self.get_logger().info(f'[M7] 후진 {why}: {moved:.2f} m 물러남 → '
                                    f'{"라이다로 가장 빈 방향 찾기" if m["probe_req"] else "차로 다시 고르기"}')
             self.m7_publish(0.0, 0.0)
@@ -1557,67 +1643,72 @@ class MissionManager(Node):
                                        f'{"비어 있음" if a_own == math.inf else f"{a_own:.2f} m"}, 차로 {j} 앞 '
                                        f'{"비어 있음" if aj == math.inf else f"{aj:.2f} m"} (s {sc:.2f} m)')
                 k, lt, changing = j, self.m7_lane_l(j), True
-        # 4) 방향·속도: 바라는 방향 (pure pursuit) 에 가까운 후보 중 쓸기 검사로 m7_go_free_m 이상 갈 수 있는 것.
-        #    없으면 제자리 회전 (v = 0) 으로 더 멀리 갈 수 있는 방향, 그것도 없으면 막힘
-        cap = math.radians(g('m7_pp_heading_deg'))
-        psi_pp = max(-cap, min(cap, math.atan2(lt - lc, g('m7_lookahead_m'))))
-        cands = [psi_pp, 0.0, psi]           # 지금 방향 그대로 (회전 없이) 도 후보 — 돌 수 없는 자리에서 빠져나가게
-        if changing:
-            sig = 1.0 if lt > lc else -1.0
-            stp = math.radians(g('m7_heading_step_deg'))
-            cands += [sig * i * stp for i in range(1, int(g('m7_max_heading_deg') / g('m7_heading_step_deg')) + 1)]
-        res = []
-        near_rot = [b for b in near if b not in behind]
-        for h in sorted(set(round(c, 4) for c in cands)):
-            dm = g('m7_check_m')
-            if changing and abs(h) > 0.09:
-                dm = min(dm, abs(lt - lc) / math.sin(abs(h)) + 0.25)     # 목표 차로까지만 본다 (그 너머 차로는 상관없음)
-            fr = self.m7_free(sc, lc, h, near, dm)
-            rok = abs(wrap(h - psi)) < math.radians(3.0) or self.m7_rot_ok(sc, lc, psi, h, near_rot)
-            res.append((h, fr, rok, dm))
-        def reach_ok(r):
-            # 차로 변경 중 비스듬한 방향은 목표 차로 (가운데 − m7_reach_slack_m) 까지 끝까지 비어 있을 때만 — 조금만 비어도 꺾으면
-            # 옆 LIMO 옆면에 비스듬히 붙어 갇힌다 (실차 11-06 full2: +45° 0.36 m 빔 → 가운데 LIMO 옆에서 후진 반복).
-            # 못 가면 지금 방향 (0°) 으로 직진하다가 옆이 열리면 꺾는다.
-            if not changing or abs(r[0]) <= 0.09:
-                return True
-            return r[1] * math.sin(abs(r[0])) >= abs(lt - lc) - g('m7_reach_slack_m')
-        go = [r for r in res if r[2] and r[1] >= min(g('m7_go_free_m'), r[3] - 0.01) and reach_ok(r)]
-        v = w = 0.0
-        if go:
-            h, fr, _, dm = min(go, key=lambda r: (round(abs(wrap(r[0] - psi_pp)), 3), -r[1]))
-            eff = g('m7_check_m') if (dm < g('m7_check_m') and fr >= dm - 1e-6) else fr
-            # 차는 돌면서 지금 향한 방향으로도 나간다 → 지금 방향의 빈 거리로도 제한 (안 하면 비스듬한 채 모서리로 다가간다)
-            fr_now = self.m7_free(sc, lc, psi, near, g('m7_check_m'))
-            eff = min(eff, fr_now)
-            vmax = g('m7_speed') if abs(h) < math.radians(10.0) else g('m7_change_speed')
-            v = min(vmax, g('m7_kv') * (eff - g('m7_stop_gap_m')))
-            v = 0.0 if v < 0.02 else v
-            turn_first = abs(wrap(h - psi)) > math.radians(g('m7_turn_first_deg'))
-            if v == 0.0 and abs(wrap(h - psi)) >= math.radians(3.0):
-                turn_first = True              # 지금 방향으로는 못 가지만 고른 방향으로 돌 수는 있음 → 제자리에서 돈다
-            if turn_first:
-                v = 0.0
-            w = k_lim(g('m7_k_heading') * wrap(h - psi) - g('m7_kd_heading') * wz)
-            kind = 'rotate' if turn_first else 'straight' if abs(h) < math.radians(10.0) else 'diag'
-            self.m7_mode(kind, {'rotate': f'제자리 회전 → {math.degrees(h):+.0f}° (그 방향 {fr:.2f} m 빔)',
-                                'straight': f'직진 (앞 {fr:.2f} m 빔, 차로 {k})',
-                                'diag': f'대각 {math.degrees(h):+.0f}° 로 차로 {k} 쪽 (그 방향 {fr:.2f} m 빔)'}[kind])
-            blocked = v == 0.0 and not turn_first
+        blk_msg = None
+        if self.ack():
+            # 4a) 아커만: 원호 두 개 (첫 원호 → 둘째 원호) 후보 중 안 닿고 목표 차로 가운데·차로 방향에 가장 가까워지는 것
+            v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing)
         else:
-            cur = max((r[1] for r in res if abs(wrap(r[0] - psi)) < math.radians(3.0)), default=0.0)
-            rots = [r for r in res if r[2] and abs(wrap(r[0] - psi)) >= math.radians(3.0) and reach_ok(r)]
-            best = max(rots, key=lambda r: r[1], default=None)
-            if best is not None and best[1] > max(cur, 0.0) + 0.05:
-                w = k_lim(g('m7_k_heading') * wrap(best[0] - psi) - g('m7_kd_heading') * wz)
-                self.m7_mode('rotate', f'제자리 회전 → {math.degrees(best[0]):+.0f}° (그 방향 {best[1]:.2f} m, 지금 방향 {cur:.2f} m)')
-                blocked = False
+            # 4) 방향·속도: 바라는 방향 (pure pursuit) 에 가까운 후보 중 쓸기 검사로 m7_go_free_m 이상 갈 수 있는 것.
+            #    없으면 제자리 회전 (v = 0) 으로 더 멀리 갈 수 있는 방향, 그것도 없으면 막힘
+            cap = math.radians(g('m7_pp_heading_deg'))
+            psi_pp = max(-cap, min(cap, math.atan2(lt - lc, g('m7_lookahead_m'))))
+            cands = [psi_pp, 0.0, psi]           # 지금 방향 그대로 (회전 없이) 도 후보 — 돌 수 없는 자리에서 빠져나가게
+            if changing:
+                sig = 1.0 if lt > lc else -1.0
+                stp = math.radians(g('m7_heading_step_deg'))
+                cands += [sig * i * stp for i in range(1, int(g('m7_max_heading_deg') / g('m7_heading_step_deg')) + 1)]
+            res = []
+            near_rot = [b for b in near if b not in behind]
+            for h in sorted(set(round(c, 4) for c in cands)):
+                dm = g('m7_check_m')
+                if changing and abs(h) > 0.09:
+                    dm = min(dm, abs(lt - lc) / math.sin(abs(h)) + 0.25)     # 목표 차로까지만 본다 (그 너머 차로는 상관없음)
+                fr = self.m7_free(sc, lc, h, near, dm)
+                rok = abs(wrap(h - psi)) < math.radians(3.0) or self.m7_rot_ok(sc, lc, psi, h, near_rot)
+                res.append((h, fr, rok, dm))
+            def reach_ok(r):
+                # 차로 변경 중 비스듬한 방향은 목표 차로 (가운데 − m7_reach_slack_m) 까지 끝까지 비어 있을 때만 — 조금만 비어도 꺾으면
+                # 옆 LIMO 옆면에 비스듬히 붙어 갇힌다 (실차 11-06 full2: +45° 0.36 m 빔 → 가운데 LIMO 옆에서 후진 반복).
+                # 못 가면 지금 방향 (0°) 으로 직진하다가 옆이 열리면 꺾는다.
+                if not changing or abs(r[0]) <= 0.09:
+                    return True
+                return r[1] * math.sin(abs(r[0])) >= abs(lt - lc) - g('m7_reach_slack_m')
+            go = [r for r in res if r[2] and r[1] >= min(g('m7_go_free_m'), r[3] - 0.01) and reach_ok(r)]
+            v = w = 0.0
+            if go:
+                h, fr, _, dm = min(go, key=lambda r: (round(abs(wrap(r[0] - psi_pp)), 3), -r[1]))
+                eff = g('m7_check_m') if (dm < g('m7_check_m') and fr >= dm - 1e-6) else fr
+                # 차는 돌면서 지금 향한 방향으로도 나간다 → 지금 방향의 빈 거리로도 제한 (안 하면 비스듬한 채 모서리로 다가간다)
+                fr_now = self.m7_free(sc, lc, psi, near, g('m7_check_m'))
+                eff = min(eff, fr_now)
+                vmax = g('m7_speed') if abs(h) < math.radians(10.0) else g('m7_change_speed')
+                v = min(vmax, g('m7_kv') * (eff - g('m7_stop_gap_m')))
+                v = 0.0 if v < 0.02 else v
+                turn_first = abs(wrap(h - psi)) > math.radians(g('m7_turn_first_deg'))
+                if v == 0.0 and abs(wrap(h - psi)) >= math.radians(3.0):
+                    turn_first = True              # 지금 방향으로는 못 가지만 고른 방향으로 돌 수는 있음 → 제자리에서 돈다
+                if turn_first:
+                    v = 0.0
+                w = k_lim(g('m7_k_heading') * wrap(h - psi) - g('m7_kd_heading') * wz)
+                kind = 'rotate' if turn_first else 'straight' if abs(h) < math.radians(10.0) else 'diag'
+                self.m7_mode(kind, {'rotate': f'제자리 회전 → {math.degrees(h):+.0f}° (그 방향 {fr:.2f} m 빔)',
+                                    'straight': f'직진 (앞 {fr:.2f} m 빔, 차로 {k})',
+                                    'diag': f'대각 {math.degrees(h):+.0f}° 로 차로 {k} 쪽 (그 방향 {fr:.2f} m 빔)'}[kind])
+                blocked = v == 0.0 and not turn_first
             else:
-                blocked = True
+                cur = max((r[1] for r in res if abs(wrap(r[0] - psi)) < math.radians(3.0)), default=0.0)
+                rots = [r for r in res if r[2] and abs(wrap(r[0] - psi)) >= math.radians(3.0) and reach_ok(r)]
+                best = max(rots, key=lambda r: r[1], default=None)
+                if best is not None and best[1] > max(cur, 0.0) + 0.05:
+                    w = k_lim(g('m7_k_heading') * wrap(best[0] - psi) - g('m7_kd_heading') * wz)
+                    self.m7_mode('rotate', f'제자리 회전 → {math.degrees(best[0]):+.0f}° (그 방향 {best[1]:.2f} m, 지금 방향 {cur:.2f} m)')
+                    blocked = False
+                else:
+                    blocked = True
         if blocked:
             v = w = 0.0
-            self.m7_mode('blocked', '갈 방향 없음 (쓸기 검사): ' + ', '.join(f'{math.degrees(r[0]):+.0f}° {r[1]:.2f} m'
-                                                                       + ('' if r[2] else ' (회전 막힘)') for r in res))
+            self.m7_mode('blocked', blk_msg or ('갈 방향 없음 (쓸기 검사): ' + ', '.join(f'{math.degrees(r[0]):+.0f}° {r[1]:.2f} m'
+                                                                       + ('' if r[2] else ' (회전 막힘)') for r in res)))
             if m['blocked'] is None:
                 m['blocked'] = now
             elif now - m['blocked'] > 2 * g('m7_blocked_s'):
@@ -1868,13 +1959,21 @@ class MissionManager(Node):
         ex = self._m8['exit']
         herr = wrap(ex['dir'] - self._yaw)
         (ax_, ay_), _, lat = self.m8_axis_aim(ex['mid'], ex['dir'], g('m8_exit_look_m'))
-        if (abs(herr) < math.radians(g('m8_exit_deg')) and abs(lat) < g('m8_exit_lat_m')) or now - ex['t'] > g('m8_exit_s'):
+        t_lim = g('m8_exit_s') * (2.0 if self.ack() else 1.0)   # 아커만은 앞으로 가며 맞추므로 더 걸림
+        if (abs(herr) < math.radians(g('m8_exit_deg')) and abs(lat) < g('m8_exit_lat_m')) or now - ex['t'] > t_lim:
             self.m8_finish(now, f'통로 출구선에 맞춤 (방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm, {now - ex["t"]:.1f} s)')
             return
         h = math.atan2(ay_, ax_)
         wz = self._imu[2] if self._imu is not None else self._yaw_rate
         v = g('m8_exit_speed') * 0.5 if abs(h) < math.radians(15.0) else 0.0
         w = max(-g('m7_max_w'), min(g('m7_max_w'), g('m7_k_heading') * h - g('m7_kd_heading') * wz))
+        if self.ack():
+            # 아커만: 제자리에서 못 돎 (2D 시뮬 11-09 k2·k7: −31~−38° 틀어진 채 3 s 서 있다 끝 → 코너에서 차선을 놓쳐 트랙 밖) →
+            # 출구선 위 점을 pure pursuit 로 앞으로 가며 맞춤 (곡률 ≤ 1/최소 반경)
+            v = g('m8_exit_speed') * 0.5
+            kap = 2.0 * ay_ / max(1e-3, ax_ * ax_ + ay_ * ay_)
+            kmax = 1.0 / g('ack_plan_radius_m')
+            w = v * max(-kmax, min(kmax, kap))
         self.m8_mode('exit', f'통로 출구선 맞추는 중: 방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm')
         self.m7_publish(v, w)
 
@@ -1930,7 +2029,15 @@ class MissionManager(Node):
                    else '뒤 라바콘' if mem < 0.06 else None)
             if why is None:
                 self.m8_mode('back', '후진 중')
-                self.m7_publish(-g('m7_back_speed'), 0.0)
+                w_b = 0.0
+                if self.ack() and m['target'] is not None:
+                    # 아커만: 후진하면서 목표 틈 쪽으로 방향을 튼다 (곧게 후진하면 같은 자세로 다시 막힘)
+                    c_, s_ = math.cos(self._yaw), math.sin(self._yaw)
+                    tx_, ty_ = m['target'][0] - self._pos[0], m['target'][1] - self._pos[1]
+                    brg = math.atan2(-tx_ * s_ + ty_ * c_, tx_ * c_ + ty_ * s_)
+                    if abs(brg) > math.radians(3.0):
+                        w_b = math.copysign(g('m7_back_speed') / g('ack_plan_radius_m'), brg)
+                self.m7_publish(-g('m7_back_speed'), w_b)
                 return
             m['back'] = None
             m['mon'].reset()
@@ -1997,6 +2104,31 @@ class MissionManager(Node):
         if v == 0.0:            # 통로 안 제자리 회전은 작게
             w = g('m7_k_heading') * max(-math.radians(g('m8_rot_limit_deg')), min(math.radians(g('m8_rot_limit_deg')), h)) - g('m7_kd_heading') * wz
         w = max(-g('m7_max_w'), min(g('m7_max_w'), w))
+        if self.ack() and g('m8_ack_arcs'):
+            # 아커만: 목표점 (mx, my) 쪽 pure pursuit 곡률에 가장 가까운, 라바콘에 안 닿는 곡률 (반경 ≥ ack_plan_radius_m) 원호.
+            # 제자리 회전 (v = 0, w ≠ 0) 이 없으니 다 닿으면 0 → 막힘 감시가 조향 후진
+            kmax = 1.0 / g('ack_plan_radius_m')
+            ux, uy = (mx, my) if (aim is not None or cands) else (0.5, 0.0)
+            kpp = max(-kmax, min(kmax, 2.0 * uy / max(1e-3, ux * ux + uy * uy)))
+            K = np.linspace(-kmax, kmax, 15)
+            clr = avoid.arc_clear(K, boxes, g('m8_ack_arc_m'), steps=(0.0, 0.01, 0.02, 0.03))
+            okk = [(k_, c_) for k_, c_ in zip(K, clr) if c_ >= 0.0]
+            if okk:
+                kap, cm = min(okk, key=lambda q: abs(q[0] - kpp) - 0.5 * q[1])
+                v = g('m8_slow_speed') if cm < 0.02 else min(g('m8_speed'), max(g('m8_slow_speed'), v))
+                w = v * kap
+                m['ack_blk'] = None
+            else:
+                v, w = 0.0, 0.0                # 어느 원호도 닿음 → 1 s 뒤 조향 후진 (막힘 감시는 명령 0 이면 안 잡음)
+                if m.get('ack_blk') is None:
+                    m['ack_blk'] = now
+                elif now - m['ack_blk'] > 1.0:
+                    m['ack_blk'] = None
+                    m['back'] = {'from': self._pos, 't': now}
+                    m['backs'] += 1
+                    self.get_logger().warn(f'[M8] 아커만: 안 닿는 원호 없음 (곡률 ±{kmax:.1f}) → 조향 후진 {g("m8_back_m"):.2f} m')
+                    self.m7_publish(0.0, 0.0)
+                    return
         kind = 'slow' if tight else 'axis' if on_axis else 'gate' if aim is not None else 'gap' if cands else 'nogap'
         self.m8_mode(kind, {'slow': f'좁음 → {g("m8_slow_speed")} m/s (방향 {math.degrees(h):+.0f}°, 빈 거리 {fr:.2f} m)',
                             'gate': f'통로 틈 {len(gates)} 개 (가장 가까운 폭 {gap:.2f} m) 가운데선 따라감 → 방향 {math.degrees(h):+.0f}° (빈 거리 {fr:.2f} m)',

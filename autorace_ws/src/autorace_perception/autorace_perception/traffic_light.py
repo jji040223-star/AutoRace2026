@@ -70,6 +70,7 @@ class TrafficLightNode(Node):
         p('transition_ratio', 2.0)         #   이 배 넘게 밝아진 칸이 하나뿐이면 그 칸이 켜진 것 (전환 직후 꺼진 칸 잔상)
         p('size_tol', 0.25)                # |크기 거리 − 예상 거리| ≤ 이 비율 × 예상 거리
         p('light_beyond_m', 1.65)          # 정지선 가까운 끝 → 신호등, 진행 방향 [m] (시뮬: 정지선 x 2.28, 신호등 x 3.95)
+        p('light_beyond2_m', 0.75)         # 횡단보도 정지선 (서행 구간 정지선 다음 가로선, x 3.20) → 신호등 [m]. 첫 선을 지난 뒤 이 선으로 바꿈
         p('light_lateral_m', -0.37)        # 진행 방향 왼쪽 + [m] (시뮬: 차로 가운데 y 4.84, 신호등 y 4.47 → 오른쪽)
         p('line_match_m', 0.10)            # 처음 잡은 정지선과 이만큼 넘게 다른 측정은 다른 선
         p('line_keep_m', 1.0)              # 정지선이 차 뒤로 이만큼 지나가면 잊음
@@ -123,7 +124,7 @@ class TrafficLightNode(Node):
             return
         x, y, yaw = pose
         if self._line is not None:
-            lx, ly, lyaw = self._line
+            lx, ly, lyaw, _ = self._line
             dyaw = abs((yaw - lyaw + math.pi) % (2 * math.pi) - math.pi)
             if ((lx - x) * math.cos(yaw) + (ly - y) * math.sin(yaw) < -g('line_keep_m')
                     or dyaw > math.radians(g('line_turn_deg'))):
@@ -132,8 +133,20 @@ class TrafficLightNode(Node):
             return
         d = g('cam_x') + msg.stop_line_dist_m
         pt = (x + d * math.cos(yaw), y + d * math.sin(yaw), yaw)
-        if self._line is None or math.dist(pt[:2], self._line[:2]) < g('line_match_m'):
-            self._line = pt
+        if self._line is None:
+            self._line = pt + (g('light_beyond_m'),)          # 처음 본 선 = 서행 구간 정지선 (신호등 1.65 m 앞)
+        elif math.dist(pt[:2], self._line[:2]) < g('line_match_m'):
+            self._line = pt + (self._line[3],)
+        else:
+            # 다른 선: 카메라가 잡은 선을 이미 지났고 새 선이 앞에 있으면 = 횡단보도 정지선 (신호등 0.75 m 앞) → 기준을 옮김.
+            # mission_manager 가 이제 횡단보도 정지선에 서서 (11-09), 지나온 서행 구간 선을 계속 쓰면 오도메트리 오차가 쌓여
+            # 예상 거리가 틀어져 신호등 박스를 다 버림 (2D 시뮬 아커만 k5: 크기 0.78 ≠ 예상 1.04 로 초록을 못 봄)
+            lx, ly, lyaw, lb = self._line
+            cx, cy = x + g('cam_x') * math.cos(yaw), y + g('cam_x') * math.sin(yaw)
+            passed = (lx - cx) * math.cos(lyaw) + (ly - cy) * math.sin(lyaw) < 0.0
+            if passed and lb == g('light_beyond_m'):
+                self._line = pt + (g('light_beyond2_m'),)
+                self.get_logger().info(f'[traffic_light] 서행 구간 정지선을 지남 → 횡단보도 정지선 (앞 {d:.2f} m) 기준으로 예상 거리')
 
     def expected_dist(self, pose):
         """카메라 → 신호등 예상 거리 (정지선을 봤을 때만), 아니면 None."""
@@ -141,9 +154,9 @@ class TrafficLightNode(Node):
         if self._line is None or pose is None:
             return None
         x, y, yaw = pose
-        lx, ly, lyaw = self._line
+        lx, ly, lyaw, beyond = self._line
         cx, cy = x + g('cam_x') * math.cos(yaw), y + g('cam_x') * math.sin(yaw)
-        along = (lx - cx) * math.cos(lyaw) + (ly - cy) * math.sin(lyaw) + g('light_beyond_m')
+        along = (lx - cx) * math.cos(lyaw) + (ly - cy) * math.sin(lyaw) + beyond
         lat = -(lx - cx) * math.sin(lyaw) + (ly - cy) * math.cos(lyaw) + g('light_lateral_m')
         return math.hypot(along, lat) if along > 0.1 else None
 

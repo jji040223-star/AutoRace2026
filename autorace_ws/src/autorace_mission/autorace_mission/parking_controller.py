@@ -110,6 +110,14 @@ class ParkingController(Node):
         p('corner_min_m', 0.03)            # 모서리 → 선 여유가 이보다 작으면 앞뒤 보정
         p('max_fix', 2)
         p('hold_s', 2.5)
+        p('park_exit', True)               # 주차 뒤 빠져나오기 — 빠져나와 차로로 나오기까지가 M4 (11-09 사용자). false = 칸 안에서 끝
+        # 아커만 (앞바퀴 조향 — 제자리 회전 없음): 칸 가운데보다 반경만큼 앞에서 전진 원호로 90° 들어가고 (ARC_IN),
+        # 들어간 만큼 후진한 뒤 후진 원호로 차로 가운데로 나온다 (ARC_OUT). 원호 중에는 남은 거리로 반경을 다시 계산
+        p('drive_mode', 'diff')            # diff | ackermann
+        p('ack_min_radius_m', 0.47)        # 최소 회전 반경 (limo_base 가 자르는 값)
+        p('ack_park_radius_m', 0.50)       # 들어가기 원호 계획 반경 (칸 가운데 − 이만큼 앞에서 꺾기 시작)
+        p('ack_arc_speed', 0.08)
+        p('ack_arc_end_deg', 2.0)          # 90° 에서 이만큼 안이면 원호 끝
         p('exit_speed', 0.09)
         p('stuck_s', 1.0)
         p('max_retry', 3)
@@ -478,6 +486,10 @@ class ParkingController(Node):
                 self.meas = []
             elif self.rotate_stuck(now, False):
                 return
+        elif s == 'ARC_IN':
+            self.do_arc_in(now)
+        elif s == 'ARC_OUT':
+            self.do_arc_out(now)
         elif s == 'MEASURE':
             self.do_measure(now)
         elif s == 'ENTER':
@@ -493,7 +505,13 @@ class ParkingController(Node):
                 self.set_state(self.after_rot or 'ALIGN', f'돌아서기도 안 끝남 (오차 {math.degrees(wrap(self.rot_target - self.heading())):+.1f}°) → 그대로 정렬')
         elif s == 'HOLD':
             self.pub(0.0, 0.0)
-            if now - self.phase_t >= g('hold_s'):
+            if now - self.phase_t >= g('hold_s') and not g('park_exit'):
+                self.result += f', 전체 {now - self.t0:.1f} s (빠져나오지 않음 — park_exit false)'
+                self.set_state('DONE', self.result)
+                self.result_pub.publish(String(data=self.result))
+                self.done_pub.publish(Empty())
+                self.pub(0.0, 0.0)
+            elif now - self.phase_t >= g('hold_s'):
                 self.exit_to = 'ROTATE_OUT'
                 self.set_state('EXIT', f'{g("hold_s"):.1f} s 정지 끝 → 들어간 거리 {self.enter_len:.2f} m 후진')
         elif s == 'EXIT':
@@ -583,7 +601,7 @@ class ParkingController(Node):
     def do_align(self, now):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         herr = wrap(self.h0 - self.heading())
-        if not self.align_rot and abs(herr) > math.radians(g('align_head_gate_deg')):
+        if not self.align_rot and abs(herr) > math.radians(g('align_head_gate_deg')) and not self.ack():
             # 방향이 많이 틀어진 채 들어옴 (돌아서기가 접촉·시간 한도로 덜 끝남 등) — 앞뒤로 가면 칸 축 (옆 LIMO) 쪽으로 감.
             # 제자리에서 먼저 처음 방향으로, 다 돌 때까지 (래치) (다른 세션 검토 11-06)
             self.align_rot = True
@@ -607,6 +625,14 @@ class ParkingController(Node):
                 self.rot_reset(now)
             return
         err = self.bay['along'] - self.along()
+        if self.ack():
+            err -= g('ack_park_radius_m')    # 아커만: 칸 가운데 − 반경 자리에서 원호 시작
+        if abs(err) < g('align_tol_m') and abs(self.speed) < 0.01 and self.ack():
+            self.pub(0.0, 0.0)
+            self.lat_ref = self.lateral()    # 차로 가운데 (나올 때 여기로)
+            self.set_state('ARC_IN', f'원호 시작 자리 (칸 가운데 {g("ack_park_radius_m"):.2f} m 앞, 오차 {err * 100:+.1f} cm) → '
+                                     f'전진 원호 {"오른쪽" if self.sgn < 0 else "왼쪽"} 90°')
+            return
         if abs(err) < g('align_tol_m') and abs(self.speed) < 0.01:
             # 제자리 회전 반경 + 여유 확인 (라이다 점 쓸기 검사)
             pt = self.pts()
@@ -649,7 +675,10 @@ class ParkingController(Node):
             dd = (self.pose[0] - cx0) * math.cos(a) + (self.pose[1] - cy0) * math.sin(a)
             self.bay['c'] = (self.pose[0] - dd * math.cos(a) + e * lx, self.pose[1] - dd * math.sin(a) + e * ly)
             self.get_logger().info(f'[M4] 다시 잼: 양옆 LIMO 면 왼 {yl:+.3f} / 오른 {yr:+.3f} m → 칸 가운데 옆 오차 {e * 100:+.1f} cm')
-        if abs(e) > g('measure_tol_m'):
+        if abs(e) > g('measure_tol_m') and self.ack():
+            self.get_logger().warn(f'[M4] 옆 오차 {e * 100:+.1f} cm > {g("measure_tol_m") * 100:.0f} cm — 아커만은 돌아 나오지 않고 '
+                                   f'다시 잰 칸 가운데로 들어가며 조향으로 맞춤')
+        elif abs(e) > g('measure_tol_m'):
             self.retry += 1
             if self.retry > g('max_retry'):
                 self.set_state('FAIL', f'옆 오차 {e * 100:+.1f} cm — 재시도 넘음')
@@ -663,6 +692,70 @@ class ParkingController(Node):
         self.enter_from = self.pose[:2]
         self.line = StopLine(g('line_match_m'))
         self.set_state('ENTER', f'전진 진입 (칸 깊이 가운데까지 약 {self.bay_frame()[0] * -1:.2f} m)')
+
+    def ack(self):
+        return self.get_parameter('drive_mode').value == 'ackermann'
+
+    def turned(self):
+        """처음 방향에서 칸 쪽으로 돈 각 [rad] (0 = 진행 방향, 90° = 칸 축)."""
+        return self.sgn * wrap(self.heading() - self.h0)
+
+    def do_arc_in(self, now):
+        """전진 원호로 90°. 남은 진행 거리 Δu = 칸 가운데 − 지금, 돈 각 θ 에서 칸 축에 닿는 반경 r = Δu / (1 − sin θ)
+        (반경을 최소 반경으로 자르면 칸 가운데를 지나침 → ENTER 가 옆 오차를 조향으로 맞춤)."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        th = self.turned()
+        if th >= math.radians(90.0 - g('ack_arc_end_deg')):
+            self.pub(0.0, 0.0)
+            self.rot_err['in'] = math.degrees(th) - 90.0
+            du = self.bay['along'] - self.along()
+            self.set_state('MEASURE', f'원호 끝 (90° 오차 {self.rot_err["in"]:+.1f}°, 칸 가운데선까지 진행 {du * 100:+.1f} cm)')
+            self.meas = []
+            return
+        du = self.bay['along'] - self.along()
+        den = 1.0 - math.sin(max(0.0, th))
+        r = du / den if den > 1e-3 and du > 0 else g('ack_min_radius_m')
+        r = max(g('ack_min_radius_m'), min(3.0, r))
+        v = g('ack_arc_speed')
+        w = self.sgn * v / r
+        self.arc_log('in', f'전진 원호: 돈 각 {math.degrees(th):.0f}°, 칸 가운데선까지 {du:.2f} m → 반경 {r:.2f} m')
+        if self.stuck(now, v, w):
+            return
+        self.pub(v, w)
+
+    def do_arc_out(self, now):
+        """후진 원호로 처음 방향까지. 차로 가운데까지 남은 깊이 d, 돈 각 θ 에서 r = d / (1 − cos θ)."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        th = self.turned()
+        d = self.sgn * (self.lateral() - getattr(self, 'lat_ref', 0.0))   # 차로 가운데에서 칸 쪽 깊이 (+)
+        if th <= math.radians(g('ack_arc_end_deg') + 1.0):
+            self.pub(0.0, 0.0)
+            then = getattr(self, 'arc_then', None)
+            self.arc_then = None
+            if then == 'ALIGN':
+                self.set_state('ALIGN', f'차로로 나옴 (방향 {math.degrees(th):+.1f}°, 차로 가운데에서 {d * 100:+.1f} cm) → 정렬부터')
+                return
+            self.rot_err['out'] = math.degrees(th)
+            self.result += f', 나올 때 방향 오차 (IMU) {self.rot_err["out"]:+.1f}°, 차로 가운데에서 {d * 100:+.1f} cm, 전체 {now - self.t0:.1f} s'
+            self.set_state('DONE', self.result)
+            self.result_pub.publish(String(data=self.result))
+            self.done_pub.publish(Empty())
+            return
+        den = 1.0 - math.cos(th)
+        r = d / den if den > 1e-3 and d > 0 else g('ack_min_radius_m')
+        r = max(g('ack_min_radius_m'), min(3.0, r))
+        v = -g('ack_arc_speed')
+        w = -self.sgn * abs(v) / r            # 칸 쪽으로 돈 것을 되돌림
+        self.arc_log('out', f'후진 원호: 돈 각 {math.degrees(th):.0f}°, 차로 가운데까지 깊이 {d:.2f} m → 반경 {r:.2f} m')
+        if self.stuck(now, abs(v), w):
+            return
+        self.pub(v, w)
+
+    def arc_log(self, key, msg):
+        t = self.now()
+        if t - getattr(self, '_arc_log_t', {}).get(key, 0.0) > 1.0:
+            self._arc_log_t = {**getattr(self, '_arc_log_t', {}), key: t}
+            self.get_logger().info(f'[M4] {msg}')
 
     def depth_remain(self):
         """칸 깊이 가운데까지 남은 거리 [m] — 끝선을 봤으면 끝선 − 칸 깊이 반, 아니면 LIMO 로 잰 칸 가운데."""
@@ -745,10 +838,15 @@ class ParkingController(Node):
         if d <= start_d + 0.005:
             self.pub(0.0, 0.0)
             nxt = self.exit_to or 'ROTATE_OUT'
-            if nxt == 'ALIGN':
+            if nxt == 'ALIGN' and self.ack():
+                self.arc_then = 'ALIGN'
+                self.set_state('ARC_OUT', '빠져나옴 → 후진 원호로 차로에 나와 정렬부터')
+            elif nxt == 'ALIGN':
                 self.rot_target = self.h0
                 self.after_rot = 'ALIGN'
                 self.set_state('ROTATE_OUT_RETRY', '빠져나옴 → 돌아서 정렬부터')
+            elif self.ack():
+                self.set_state('ARC_OUT', f'후진 끝 (들어간 {self.enter_len:.2f} m 만큼, 들어가기 시작한 자리에서 {back * 100:.1f} cm) → 후진 원호로 차로')
             else:
                 self.rot_target = self.h0
                 self.set_state('ROTATE_OUT', f'후진 끝 (들어간 {self.enter_len:.2f} m 만큼, 들어가기 시작한 자리에서 {back * 100:.1f} cm) → 반대 90°')

@@ -133,6 +133,11 @@ class Sim2D(Node):
         p('v_deadband', 0.0)
         p('w_deadband', 0.0)
         p('cmd_timeout', 0.5)
+        # 아커만 (LIMO 앞바퀴 조향 모드): limo_base 처럼 r = v/w 를 최소 회전 반경으로 자르고 조향각으로. v = 0 이면 바퀴만 꺾이고 안 돎
+        p('drive_mode', 'diff')            # diff (네 바퀴 차동, 제자리 회전) | ackermann
+        p('wheelbase', 0.2)                # LIMO 축간거리 [m]
+        p('ack_min_radius', 0.47)          # 최소 회전 반경 [m] (안쪽 바퀴 최대 28°, 윤거 0.172 → 차 중심 반경 ≈ 0.46~0.48)
+        p('steer_tau', 0.08)               # 조향 서보 지연 [s]
         p('odom_v_scale', 1.0)
         p('odom_w_scale', 1.0)
         p('imu_noise', 0.002)
@@ -284,6 +289,7 @@ class Sim2D(Node):
             self.start = (g('start_x'), g('start_y'), math.radians(g('start_yaw_deg')))
         self.x, self.y, self.yaw = self.start
         self.v = self.w = 0.0
+        self.steer = 0.0
         self.ox = self.oy = 0.0                     # 오도메트리 (출발 자세 기준, 오차 포함)
         self.oyaw = math.radians(self.g('odom_yaw0_deg'))   # 실차처럼 오도메트리 0° 가 트랙과 틀어져 있을 때 흉내
         self.imu_yaw = 0.0
@@ -562,7 +568,20 @@ class Sim2D(Node):
             wc = 0.0
         vc, wc = vc * g('act_v_gain'), wc * g('act_w_gain')   # 실제 차가 명령보다 덜·더 감/돎 (스키드·배터리)
         self.v += (vc - self.v) * min(1.0, dt / g('tau_v'))
-        self.w += (wc - self.w) * min(1.0, dt / g('tau_w'))
+        if g('drive_mode') == 'ackermann':
+            # limo_base 아커만: r = v / w → |r| ≥ 최소 반경, 조향 = atan(L / r). v = 0 이고 w ≠ 0 이면 최대로 꺾음 (안 돎)
+            L, dmax = g('wheelbase'), math.atan(g('wheelbase') / g('ack_min_radius'))
+            if abs(wc) < 1e-4:
+                dc = 0.0
+            elif abs(vc) < 1e-4:
+                dc = math.copysign(dmax, wc)
+            else:
+                dc = max(-dmax, min(dmax, math.atan(L * wc / vc)))
+            self.steer = getattr(self, 'steer', 0.0)
+            self.steer += (dc - self.steer) * min(1.0, dt / g('steer_tau'))
+            self.w = self.v * math.tan(self.steer) / L
+        else:
+            self.w += (wc - self.w) * min(1.0, dt / g('tau_w'))
         # 바퀴 헛돎: 빠른 제자리 회전이면 바퀴는 도는데 몸체는 덜 돎 (휠 odom 은 바퀴, IMU 는 몸체)
         pivot = abs(self.w) >= g('pivot_slip_w') and abs(self.v) < g('pivot_slip_v')
         if pivot and not getattr(self, '_pivot', False):
