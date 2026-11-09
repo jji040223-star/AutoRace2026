@@ -832,9 +832,9 @@ class Sim2D(Node):
         m.width, m.height = g('width'), g('height')
         m.distortion_model = 'plumb_bob'
         m.d = [0.0] * 5
-        m.k = self.K.flatten().tolist()
-        m.r = [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0]
-        m.p = [self.K[0, 0], 0.0, self.K[0, 2], 0.0, 0.0, self.K[1, 1], self.K[1, 2], 0.0, 0.0, 0.0, 1.0, 0.0]
+        m.k = [float(v) for v in self.K.flatten()]
+        m.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]   # humble: float 만
+        m.p = [float(v) for v in (self.K[0, 0], 0.0, self.K[0, 2], 0.0, 0.0, self.K[1, 1], self.K[1, 2], 0.0, 0.0, 0.0, 1.0, 0.0)]
         return m
 
     def publish_camera(self, st, want_depth):

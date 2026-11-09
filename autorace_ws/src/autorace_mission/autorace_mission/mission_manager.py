@@ -115,6 +115,10 @@ class MissionManager(Node):
         p('m5_confirm_frames', 3)
         p('m5_speed', 0.15)
         p('m5_release_m', 1.5)
+        p('m5_wait_line', True)            # 표지판을 본 뒤 바로 서행하지 않고, 그 뒤 처음 보이는 흰 가로선에 앞바퀴가 닿을 때 서행
+                                           # (실차 11-09: 출발선에서 31px 로 보여 출발하자마자 서행 — 규정은 표지판 옆 흰 선부터)
+        p('m5_line_timeout_m', 2.5)        # 표지판 확인 뒤 이만큼 가도 흰 선을 못 보면 그냥 서행 시작
+        p('m5_line_min_cov', 0.6)          # 흰 가로선으로 볼 차로 폭 덮은 비율 (글자·마름모 제외)
         # M6 서행 유도선 (지그재그)
         p('m6_resid_on', 7.5)              # [px] 시뮬: 지그재그 8.0–8.7, 직선 2.2–2.4, 코너 ≤ 6.9
         p('m6_resid_off', 5.0)
@@ -405,6 +409,7 @@ class MissionManager(Node):
         self._hit_win = {}
         self._resid_hits = 0
         self._m5_seen = self._m5_start = None
+        self._m5_arm = None                # 서행 표지판 확인 → 흰 선 기다림 {'start': 자리, 'why': 로그, 'line': (자리, 남은 거리) | None}
         self._m6_last_zig = self._m6_start = None
         self._m3 = {}                      # 이번 M3 의 기록
         self._m3_cooldown_from = None
@@ -525,6 +530,7 @@ class MissionManager(Node):
         self._yaw0, self._yaw0_buf = None, []
         self._yaw_drift = self._yaw_drift_logged = 0.0
         self._m3_cooldown_from = None
+        self._m5_arm = None
         self._odom_hist.clear()
         self._cones, self._m8, self._m8_hits, self._m8_done, self._m8_slow_until = [], {}, 0, False, 0.0
         self._m7_done = False
@@ -590,9 +596,41 @@ class MissionManager(Node):
             # 서행 구간은 출발 직후 — 횡단보도 (M3) 를 지난 뒤 서행 표지판은 오인식 (2D 시뮬 11-09 m2: 코너 직후 가짜 slow 153px
             # 로 M5 가 켜져 M7 이 안 켜지고 LIMO 에 부딪힘, 실차 11-05 run4 도 3차선에서 큰 가짜 박스)
             best = max(m5, key=lambda d: d.confidence)
-            self._m5_seen = self._m5_start = self._pos
-            self.set_state('M5_SLOW', f'{best.label} {best.confidence:.2f} 박스 높이 {best.y2 - best.y1}px, '
-                                      f'최근 {g("sign_window_frames")} 장 중 {self._hits["m5"]} 장, odom {self.fmt(self._pos)}')
+            why = (f'{best.label} {best.confidence:.2f} 박스 높이 {best.y2 - best.y1}px, '
+                   f'최근 {g("sign_window_frames")} 장 중 {self._hits["m5"]} 장')
+            if not g('m5_wait_line'):
+                self.m5_enter(why)
+            elif self._m5_arm is None:
+                self._m5_arm = {'start': self._pos, 'why': why, 'line': None, 't': self.get_clock().now().nanoseconds * 1e-9}
+                self.get_logger().info(f'[M5] 서행 표지판 확인 ({why}, odom {self.fmt(self._pos)}) → 흰 가로선에 앞바퀴가 닿으면 서행')
+
+    def m5_enter(self, why):
+        self._m5_arm = None
+        self._m5_seen = self._m5_start = self._pos
+        self.set_state('M5_SLOW', f'{why}, odom {self.fmt(self._pos)}')
+
+    def m5_arm_update(self, msg):
+        """서행 대기: 표지판 확인 뒤 보이는 흰 가로선 → 앞바퀴가 닿을 때 (오도메트리로 이어 감) M5_SLOW."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        a = self._m5_arm
+        if a is not None and g('m5_after_m3_ignore') and self._m3_done:
+            self._m5_arm = None            # 횡단보도를 지난 뒤엔 서행 안 함 (on_detections 와 같은 규칙)
+            return
+        if a is None or self.state != 'LANE':
+            return
+        if (a['line'] is None and msg.stop_line_dist_m > 0 and msg.stop_line_cov >= g('m5_line_min_cov')
+                and stamp_s(msg.header) >= a['t']):
+            pos = self.pos_at(stamp_s(msg.header))
+            if pos is not None:
+                remain = msg.stop_line_dist_m - g('m3_cam_to_front_axle_m') - g('m3_wheel_front_m')
+                a['line'] = (pos, remain)
+                self.get_logger().info(f'[M5] 흰 가로선 보임: 카메라에서 {msg.stop_line_dist_m:.3f} m (덮은 비율 {msg.stop_line_cov:.2f}), '
+                                       f'앞바퀴까지 {remain:.3f} m, 표지판 확인 뒤 {self.dist_from(a["start"]):.2f} m')
+        if a['line'] is not None and self.dist_from(a['line'][0]) >= a['line'][1]:
+            self.m5_enter(a['why'] + f' + 흰 선에 앞바퀴 (표지판 확인 뒤 {self.dist_from(a["start"]):.2f} m)')
+        elif self.dist_from(a['start']) >= g('m5_line_timeout_m'):
+            self.get_logger().warn(f'[M5] 표지판 확인 뒤 {g("m5_line_timeout_m")} m 동안 흰 가로선 못 봄 → 그냥 서행')
+            self.m5_enter(a['why'] + ' (흰 선 못 봄)')
 
     def m2_update(self, msg):
         """갈림길 표지판 결과 기억 — 같은 결과 m2_confirm_frames 장 연속이면 채택, 다른 결과가 다시 확인되면 바꾼다 (마지막 것을 따름)."""
@@ -637,6 +675,7 @@ class MissionManager(Node):
         self._ys.append((bool(msg.found), int(msg.yellow_side)))
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self._lane = msg
+        self.m5_arm_update(msg)
         if msg.yellow_side != 0 and 0.0 < msg.line_resid_px < g('m6_resid_off'):
             pose = self.pose_at(stamp_s(msg.header))
             if pose is not None:
