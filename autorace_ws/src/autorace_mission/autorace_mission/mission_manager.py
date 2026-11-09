@@ -414,6 +414,7 @@ class MissionManager(Node):
                      'dirs': collections.deque(maxlen=60), 'seen_at': None}   # M7 없이 M2 (m2_without_m7)
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
         self._bar_pt = None                               # M7 전에 본 3차선 입구 흰 가로선 (odom)
+        self._ys = collections.deque(maxlen=12)          # 최근 (차선 찾음, yellow_side) — 잠금 뒤 차로 옮기기 전 확인
         self._entry_ctr = collections.deque(maxlen=60)   # 위 점 중 곧고 두 선이 평행한 장면만 (3차선 입구 앞 1차로) — M7 격자 기준
         self._line_ctr = collections.deque(maxlen=40)    # 위 점 중 흰 가로선 (3차선 입구 선) 이 보일 때 잰 것만 — M7 격자 기준
         self._lane_ctr = collections.deque(maxlen=60)    # 최근 1차로 가운데 점 (odom 좌표) — 노란 선 양쪽을 잡은 프레임만 (M7 격자 맞춤)
@@ -621,6 +622,7 @@ class MissionManager(Node):
         return self.get_parameter('m7_prefer').value
 
     def on_lane_state(self, msg):
+        self._ys.append((bool(msg.found), int(msg.yellow_side)))
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self._lane = msg
         if msg.yellow_side != 0 and 0.0 < msg.line_resid_px < g('m6_resid_off'):
@@ -1865,7 +1867,8 @@ class MissionManager(Node):
         # 끝: 변경이 끝났고 내 차로 앞이 비었고, 다른 차로에도 가까운 장애물이 없을 때 (또는 안전장치 거리)
         clear = all(ahead(j) > g('m7_clear_m') for j in range(g('m7_lanes')))
         if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and abs(k - goal) == 1
-                and not m.get('final_shift') and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock')))
+                and not m.get('final_shift')
+                and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)))
                 and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
@@ -1882,6 +1885,14 @@ class MissionManager(Node):
                                    f'구간 {sc:.2f} m{" (안전장치 거리)" if sc > g("m7_max_m") else ""} → 슬라이딩 윈도우 리셋')
             self._m7_done = True
             self.m2_commit(k)
+
+    def not_at_edge(self, goal):
+        """카메라로 '아직 목표 쪽 끝 차로가 아님' 확인: 최근 프레임 중 차선을 잡은 게 6 장 이상이고, 목표 쪽 노란 선만 보인
+        (= 이미 그 끝 차로) 프레임이 없을 때. odom 차로 격자는 한 차로 틀어질 수 있음 (2D 시뮬 11-09 d8: 실제 A 차로인데
+        '가운데' 로 봄 — 잠금 뒤 옮기면 바깥선 밖으로 꺾을 뻔, 다른 세션 확인). 확인 못 하면 안 옮김."""
+        edge = -1 if goal == 0 else 1
+        ok = [ys for f, ys in self._ys if f]
+        return len(ok) >= 6 and edge not in ok
 
     def m2_commit(self, k):
         """M7 이 끝난 차로 = 들어간 갈림길. 결과를 확정하고 다음 리셋까지 표지판을 더 보지 않는다."""
