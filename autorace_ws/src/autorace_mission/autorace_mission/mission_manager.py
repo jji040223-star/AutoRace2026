@@ -195,6 +195,7 @@ class MissionManager(Node):
         p('ack_plan_radius_m', 0.52)       # 경로 계획에 쓰는 최소 반경 (조향 지연·오차 여유)
         p('m7_ack_d1_m', 0.25)             # 아커만 M7: 첫 원호 길이 (매 순간 다시 계획 — 이 원호의 곡률로 운전)
         p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
+        p('m8_ack_aim_m', 0.25)            # 아커만 M8 목표점 거리 — 길면 일찍 꺾기 시작해 정점에서 덜 자름 (시험: 0.40~0.50, 다른 세션 제안)
         p('m8_ack_bias_min_kappa', 0.8)    # 아커만 M8: 앞 문 3 개로 잰 곡률이 이보다 클 때만 휨 바깥쪽으로 치우침
         p('m8_ack_outer_bias_m', 0.04)     # 아커만 M8: 본 라바콘이 m8_ack_outer_bias_after 개 넘으면 (마지막 문들) 목표를 왼쪽으로 이만큼
         p('m8_ack_outer_bias_after', 10)
@@ -2289,7 +2290,7 @@ class MissionManager(Node):
         # 틈: 통로를 가로지르는 두 콘 (실제 빈 거리 = 중심 거리 − 몸통 지름 ≥ m8_gap_min_m) 의 가운데점을 이은 길에서
         # 앞 m8_aim_m 점을 따라감 (pure pursuit). 그런 틈이 없으면 (콘이 한 줄·흩어짐) 방향 순으로 이웃한 콘 사이 틈 (Follow-the-Gap)
         lim = math.radians(g('m8_max_heading_deg'))
-        aim = avoid.gate_aim(gates, g('m8_aim_m'), ref_y, ref_x, **self.m8_chain_kw())
+        aim = avoid.gate_aim(gates, g('m8_ack_aim_m') if self.ack() else g('m8_aim_m'), ref_y, ref_x, **self.m8_chain_kw())
         on_axis = False
         if aim is None:                    # 마지막 틈을 지났으면 통로 출구선을 따라감 (곧게 가면 끝 쌍 방향으로 벗어남)
             ax = self.m8_axis()
