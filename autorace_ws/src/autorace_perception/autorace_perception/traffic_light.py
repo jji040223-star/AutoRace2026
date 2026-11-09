@@ -71,6 +71,10 @@ class TrafficLightNode(Node):
         p('size_tol', 0.25)                # |크기 거리 − 예상 거리| ≤ 이 비율 × 예상 거리
         p('light_beyond_m', 1.65)          # 정지선 가까운 끝 → 신호등, 진행 방향 [m] (시뮬: 정지선 x 2.28, 신호등 x 3.95)
         p('light_beyond2_m', 0.75)         # 횡단보도 정지선 (서행 구간 정지선 다음 가로선, x 3.20) → 신호등 [m]. 첫 선을 지난 뒤 이 선으로 바꿈
+        p('line_gap_m', 0.92)              # 서행 구간 정지선 → 횡단보도 정지선 간격 [m] (도면 = 대회 트랙: x 2.28 → 3.20)
+        p('line_gap_tol_m', 0.20)          #   새 선이 첫 선에서 이 간격 ± 이만큼일 때만 기준을 옮김 (횡단보도 줄무늬·다른 가로선 거름)
+        p('dual_hypothesis', True)         # 첫 선만 봤을 때: 그 선이 사실 횡단보도 정지선일 수도 있음 (서행 구간 선을 놓침) →
+                                           #   예상 거리 두 가지 (light_beyond_m / light_beyond2_m) 중 하나와 맞으면 받음
         p('light_lateral_m', -0.37)        # 진행 방향 왼쪽 + [m] (시뮬: 차로 가운데 y 4.84, 신호등 y 4.47 → 오른쪽)
         p('line_match_m', 0.10)            # 처음 잡은 정지선과 이만큼 넘게 다른 측정은 다른 선
         p('line_keep_m', 1.0)              # 정지선이 차 뒤로 이만큼 지나가면 잊음
@@ -144,21 +148,38 @@ class TrafficLightNode(Node):
             lx, ly, lyaw, lb = self._line
             cx, cy = x + g('cam_x') * math.cos(yaw), y + g('cam_x') * math.sin(yaw)
             passed = (lx - cx) * math.cos(lyaw) + (ly - cy) * math.sin(lyaw) < 0.0
+            gap = (pt[0] - lx) * math.cos(lyaw) + (pt[1] - ly) * math.sin(lyaw)   # 첫 선 → 새 선 (진행 방향)
             if passed and lb == g('light_beyond_m'):
-                self._line = pt + (g('light_beyond2_m'),)
-                self.get_logger().info(f'[traffic_light] 서행 구간 정지선을 지남 → 횡단보도 정지선 (앞 {d:.2f} m) 기준으로 예상 거리')
+                if abs(gap - g('line_gap_m')) <= g('line_gap_tol_m'):
+                    self._line = pt + (g('light_beyond2_m'),)
+                    self.get_logger().info(f'[traffic_light] 서행 구간 정지선을 지남 → 횡단보도 정지선 (첫 선에서 {gap:.2f} m, '
+                                           f'앞 {d:.2f} m) 기준으로 예상 거리')
+                elif self.get_clock().now().nanoseconds * 1e-9 - self._last_log >= 2.0:
+                    self._last_log = self.get_clock().now().nanoseconds * 1e-9
+                    self.get_logger().info(f'[traffic_light] 다른 가로선 (첫 선에서 {gap:.2f} m, 기대 {g("line_gap_m"):.2f} ± '
+                                           f'{g("line_gap_tol_m"):.2f}) — 기준 안 옮김')
 
     def expected_dist(self, pose):
-        """카메라 → 신호등 예상 거리 (정지선을 봤을 때만), 아니면 None."""
+        """카메라 → 신호등 예상 거리 (정지선을 봤을 때만), 아니면 None. 가설이 둘이면 첫째 (지금 기준선)."""
+        e = self.expected_dists(pose)
+        return e[0] if e else None
+
+    def expected_dists(self, pose):
+        """카메라 → 신호등 예상 거리 목록 [지금 기준선 가설, (대안)]. 첫 선 (서행 구간 정지선으로 본 선) 만 봤으면
+        그 선이 사실 횡단보도 정지선일 수도 있어 (서행 구간 선을 놓침 — 실차에서 가능) light_beyond2_m 가설도 붙임.
+        두 가설은 0.9 m 차이라 size_tol 로 구분됨. 횡단보도 정지선으로 옮긴 뒤엔 하나만."""
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         if self._line is None or pose is None:
-            return None
+            return []
         x, y, yaw = pose
         lx, ly, lyaw, beyond = self._line
         cx, cy = x + g('cam_x') * math.cos(yaw), y + g('cam_x') * math.sin(yaw)
-        along = (lx - cx) * math.cos(lyaw) + (ly - cy) * math.sin(lyaw) + beyond
+        base = (lx - cx) * math.cos(lyaw) + (ly - cy) * math.sin(lyaw)
         lat = -(lx - cx) * math.sin(lyaw) + (ly - cy) * math.cos(lyaw) + g('light_lateral_m')
-        return math.hypot(along, lat) if along > 0.1 else None
+        betas = [beyond]
+        if g('dual_hypothesis') and beyond == g('light_beyond_m'):
+            betas.append(g('light_beyond2_m'))
+        return [math.hypot(base + b, lat) for b in betas if base + b > 0.1]
 
     def cells(self, bgr, d):
         """세 칸 밝기 (위·가운데·아래)."""
@@ -212,7 +233,11 @@ class TrafficLightNode(Node):
         bgr = img[:, :, ::-1] if msg.encoding.startswith('rgb') else img
         fx, fy, cx, _ = self.K
         pose = self.pose_at(t)
-        d_exp = self.expected_dist(pose)
+        d_exps = self.expected_dists(pose)
+        d_exp = d_exps[0] if d_exps else None
+
+        def exp_err(dist):
+            return min(abs(dist - e) for e in d_exps)
         ok, bad = [], []
         for d in boxes:
             bw, bh = d.x2 - d.x1, d.y2 - d.y1
@@ -227,8 +252,8 @@ class TrafficLightNode(Node):
             if not g('aspect_min') <= aspect <= g('aspect_max'):
                 bad.append((d, f'비 {aspect:.2f}'))
                 continue
-            if d_exp is not None and abs(dist - d_exp) > g('size_tol') * d_exp:
-                bad.append((d, f'크기 거리 {dist:.2f} ≠ 예상 {d_exp:.2f}'))
+            if d_exps and all(abs(dist - e) > g('size_tol') * e for e in d_exps):
+                bad.append((d, f'크기 거리 {dist:.2f} ≠ 예상 {"/".join(f"{e:.2f}" for e in d_exps)}'))
                 continue
             if not g('range_min') <= dist <= g('range_max'):
                 bad.append((d, f'거리 {dist:.2f}'))
@@ -280,8 +305,8 @@ class TrafficLightNode(Node):
         if ok and d_exp is None and g('require_line'):
             out.reason = (f'정지선 아직 안 봄 — 후보 {len(ok)} 개 (크기 확인 불가)' + ('; ' if bad else '') + '; '.join(r for _, r in bad))[:200]
         elif ok:
-            if d_exp is not None:
-                best = min(ok, key=lambda o: abs(o[3] - d_exp))
+            if d_exps:
+                best = min(ok, key=lambda o: exp_err(o[3]))
             elif len(self._track) >= g('track_min') and all(o[4] is not None for o in ok):
                 tx = float(np.median([p[0] for p in self._track]))
                 ty = float(np.median([p[1] for p in self._track]))

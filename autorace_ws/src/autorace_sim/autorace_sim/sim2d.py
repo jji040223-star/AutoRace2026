@@ -138,6 +138,12 @@ class Sim2D(Node):
         p('wheelbase', 0.2)                # LIMO 축간거리 [m]
         p('ack_min_radius', 0.47)          # 최소 회전 반경 [m] (안쪽 바퀴 최대 28°, 윤거 0.172 → 차 중심 반경 ≈ 0.46~0.48)
         p('steer_tau', 0.08)               # 조향 서보 지연 [s]
+        # 기준점: rear = 뒷축 가운데가 v 로 가고 뒷바퀴는 옆으로 안 미끄러짐 (실제 앞바퀴 조향 차. base_link = 뒷축 + L/2 앞이라
+        # 몸이 궤적보다 안쪽을 봄 — 최대 조향에서 ~12°). center = 예전 모델 (base_link 가 자전거 기준점, 미끄럼각 0) — 비교용.
+        # limo_base 의 r = v / w 도 뒷축 기준으로 봄 (agilex limo_driver 의 안쪽 바퀴 각 atan(L / (r − 윤거/2)) — 실차에서 확인할 것)
+        p('ack_ref', 'rear')
+        p('ack_steer_scale', 1.0)          # 실제 조향각 = 명령 조향각 × 이것 (서보·링크 오차로 덜 꺾임 < 1 — '실차가 덜 도는' 상황 재현).
+                                           # 최대 조향도 같이 줄어 실제 최소 반경 = L / tan(scale · atan(L / ack_min_radius))
         p('odom_v_scale', 1.0)
         p('odom_w_scale', 1.0)
         p('imu_noise', 0.002)
@@ -577,9 +583,10 @@ class Sim2D(Node):
                 dc = math.copysign(dmax, wc)
             else:
                 dc = max(-dmax, min(dmax, math.atan(L * wc / vc)))
+            dc *= g('ack_steer_scale')
             self.steer = getattr(self, 'steer', 0.0)
             self.steer += (dc - self.steer) * min(1.0, dt / g('steer_tau'))
-            self.w = self.v * math.tan(self.steer) / L
+            self.w = self.v * math.tan(self.steer) / L     # rear: v = 뒷축 속도 → 명령 w 가 그대로 방향 변화율 (잘리지 않으면)
         else:
             self.w += (wc - self.w) * min(1.0, dt / g('tau_w'))
         # 바퀴 헛돎: 빠른 제자리 회전이면 바퀴는 도는데 몸체는 덜 돎 (휠 odom 은 바퀴, IMU 는 몸체)
@@ -592,8 +599,16 @@ class Sim2D(Node):
         self._pivot = pivot
         bw = self.w * g('pivot_slip_ratio') if (pivot and self._slip) else self.w
         nyaw = wrap(self.yaw + bw * dt)
-        nx = self.x + self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
-        ny = self.y + self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
+        if g('drive_mode') == 'ackermann' and g('ack_ref') == 'rear':
+            # 뒷축 가운데를 v 로 적분하고 base_link 는 그 L/2 앞 — 몸 가운데는 옆으로도 움직임 (미끄럼각 atan(tanδ / 2))
+            hl = 0.5 * g('wheelbase')
+            rx, ry = self.x - hl * math.cos(self.yaw), self.y - hl * math.sin(self.yaw)
+            rx += self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
+            ry += self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
+            nx, ny = rx + hl * math.cos(nyaw), ry + hl * math.sin(nyaw)
+        else:
+            nx = self.x + self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
+            ny = self.y + self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
         rect = self.car_rect(nx, ny, nyaw)
         blocked = None
         for b in self.boxes:
