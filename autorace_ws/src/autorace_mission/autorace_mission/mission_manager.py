@@ -197,6 +197,8 @@ class MissionManager(Node):
         p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
         p('m8_ack_corner_assist', True)    # 아커만 M8 출구에서 차선 쌍이 안 보이면 최대 오른쪽으로 코너 보조
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
+        p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
+        p('m8_ack_assist_axis_deg', 12.0)  #   트랙 축 (주차 직선 방향) 에서 이 안이면 보조 끝
         p('m8_ack_assist_s', 3.0)          #   길어야 이만큼
         p('m8_ack_exit_deg', 15.0)         # 아커만 M8 출구: 방향이 이 안이면 (옆 오차 무시) 바로 차선 추종에 넘김
         p('m8_ack_exit_s', 1.0)            #   길어야 이만큼
@@ -2159,22 +2161,41 @@ class MissionManager(Node):
                 turned = -wrap(self._yaw - ex['dir'])
                 ln = self._lane
                 pair = ln is not None and ln.found and ln.yellow_side == 2
-                if pair or turned >= math.radians(g('m8_ack_assist_deg')) or now - asst['t'] > g('m8_ack_assist_s'):
-                    self.m8_finish(now, f'코너 보조 끝 ({"차선 쌍" if pair else "돈 각" if turned >= math.radians(g("m8_ack_assist_deg")) else "시간"}, '
-                                        f'통로 방향에서 {math.degrees(turned):.0f}° 돎, {now - asst["t"]:.1f} s)')
+                if self._yaw0 is not None:
+                    # 끝 = 트랙 축 (출발 직선 = 주차 직선 방향) 에서 m8_ack_assist_axis_deg 안 — curvy 배치는 통로 방향이 차로와 ±20°
+                    # 어긋나 '통로 방향에서 80°' 는 20° 일찍·늦게 끝남 (다른 세션 검토)
+                    ax_err = wrap(self._yaw - wrap(self._yaw0 + self._yaw_drift))
+                    aligned = abs(ax_err) < math.radians(g('m8_ack_assist_axis_deg'))
+                    how = f'트랙 축과 {math.degrees(ax_err):+.0f}°'
+                else:
+                    aligned = turned >= math.radians(g('m8_ack_assist_deg'))
+                    how = f'통로 방향에서 {math.degrees(turned):.0f}° 돎'
+                if pair or aligned or now - asst['t'] > g('m8_ack_assist_s'):
+                    self.m8_finish(now, f'코너 보조 끝 ({"차선 쌍" if pair else "방향 맞음" if aligned else "시간"}, {how}, '
+                                        f'{now - asst["t"]:.1f} s)')
                     return
                 v = g('m8_exit_speed')
                 self.m8_mode('assist', f'코너 보조: 차선이 안 잡혀 최대 오른쪽 (반경 {g("ack_min_radius_m"):.2f} m)')
                 self.m7_publish(v, -v / g('ack_min_radius_m'))
                 return
-            if abs(herr) < math.radians(g('m8_ack_exit_deg')) or now - ex['t'] > g('m8_ack_exit_s'):
-                ln = self._lane
-                if g('m8_ack_corner_assist') and not (ln is not None and ln.found and ln.yellow_side == 2):
-                    # 넘길 자리에서 가까운 차선 쌍이 안 보임 = 코너 안쪽에서 끝남 (2D 시뮬 11-09 c7·e1: 가로선만 보여 차선 추종이
-                    # 왼쪽으로 꺾다 엉뚱한 윗차로·트랙 밖 — 다른 세션 분석. 그 자리에서 최대 오른쪽이면 주차 직선 차로 안에 들어옴)
+            ln = self._lane
+            if ex.get('wait') is not None:
+                # 넘기기 전 m8_ack_assist_wait_s 동안 차선 쌍이 한 번이라도 잡히면 그냥 넘김 — 리셋 직후 첫 프레임은 정상 자리에서도
+                # 한쪽만 보이는 게 보통 (다른 세션: x5_0 첫 프레임 nl 1, 둘째부터 쌍). 끝까지 안 잡히면 코너 보조
+                if ln is not None and ln.found and ln.yellow_side == 2:
+                    self.m8_finish(now, f'통로 출구 방향 맞음 + 차선 쌍 잡힘 (아커만, {now - ex["t"]:.1f} s)')
+                    return
+                if now - ex['wait'] >= g('m8_ack_assist_wait_s'):
                     ex['assist'] = {'t': now}
-                    self.get_logger().info(f'[M8] 출구 방향 맞음 (방향 {math.degrees(herr):+.0f}°) 인데 차선 쌍이 안 보임 '
+                    self.get_logger().info(f'[M8] 출구에서 {g("m8_ack_assist_wait_s"):.1f} s 동안 차선 쌍이 안 잡힘 '
                                            f'({"차선 없음" if ln is None or not ln.found else f"한쪽 ({ln.yellow_side:+d})"}) → 코너 보조')
+                    return
+                v = g('m8_exit_speed') * 0.5     # 기다리는 동안 출구 방향 그대로 천천히
+                self.m7_publish(v, 0.0)
+                return
+            if abs(herr) < math.radians(g('m8_ack_exit_deg')) or now - ex['t'] > g('m8_ack_exit_s'):
+                if g('m8_ack_corner_assist') and not (ln is not None and ln.found and ln.yellow_side == 2):
+                    ex['wait'] = now
                     return
                 self.m8_finish(now, f'통로 출구 방향 맞음 (아커만 — 옆 무시, 방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm, '
                                     f'{now - ex["t"]:.1f} s)')
