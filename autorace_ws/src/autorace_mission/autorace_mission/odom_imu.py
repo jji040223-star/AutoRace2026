@@ -51,6 +51,9 @@ class OdomImu(Node):
         p('zupt_max', 0.05)                # [rad/s] 자이로가 이보다 크면 (멈춘 게 아님) 안 씀
         p('zupt_keep', 0.7)                # 멈춘 구간이 끝날 때 누적 평균에 합침: 그 구간 200 장마다 예전 무게 × 이것
         p('imu_out', '/imu_unbiased')
+        p('drive_mode', 'diff')            # ackermann: 휠 속도는 뒷축 속도 — 뒷축을 적분하고 base_link 는 그 ack_ref_back_m 앞
+        p('ack_ref_back_m', 0.1)           # base_link (차 가운데) → 뒷축 거리 (LIMO 축간 0.2 의 반). 0 이면 코너마다 10 cm 옆·앞뒤 오차
+                                           # (2D 시뮬 11-10: 0 이면 주차 실제 모서리 여유가 노드 추정보다 ~9 cm 작고 M7 막힘 늘어남)
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.pub = self.create_publisher(Odometry, g('odom_out'), 50)
         self.imu_pub = self.create_publisher(Imu, g('imu_out'), qos_profile_sensor_data)
@@ -125,6 +128,11 @@ class OdomImu(Node):
             wz = msg.twist.twist.angular.z
             self.off = None
             self.n_fallback += 1
+        # 아커만: 뒷바퀴는 옆으로 안 미끄러짐 → 뒷축 점이 v 로 앞으로만 가고, 몸 가운데는 돌 때 옆으로도 움직임.
+        # 방향이 바뀐 만큼의 이 항은 dt 가 튀어 거리 적분을 건너뛸 때도 더함 (안 그러면 그 회전분 위치가 영영 어긋남 — 다른 세션)
+        d = g('ack_ref_back_m') if g('drive_mode') == 'ackermann' else 0.0
+        self.x += d * (math.cos(new_yaw) - math.cos(self.yaw))
+        self.y += d * (math.sin(new_yaw) - math.sin(self.yaw))
         if 0.0 < dt < 0.5:
             v = msg.twist.twist.linear.x
             mid = self.yaw + 0.5 * wrap(new_yaw - self.yaw)

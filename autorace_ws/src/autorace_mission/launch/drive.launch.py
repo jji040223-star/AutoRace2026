@@ -41,7 +41,8 @@ def share(pkg, *p):
 def _actions(context):
     arg = lambda name: LaunchConfiguration(name).perform(context).lower() == 'true'   # noqa: E731
     sim = arg('use_sim_time')
-    common = {'use_sim_time': sim}
+    # 구동 방식: 이 브랜치 (ackermann) 기본은 아커만. 노드마다 기본값이 diff 라 여기서 안 넘기면 실차가 제자리 회전을 하려다 못 감
+    common = {'use_sim_time': sim, 'drive_mode': LaunchConfiguration('drive_mode').perform(context)}
     odom_topic = LaunchConfiguration('odom_topic').perform(context)
     ov = LaunchConfiguration('params').perform(context)
     OV = [p for p in ov.split(',') if p]        # 실차 보정값 등 — 모든 노드 기본 설정 위에 덮어씀 (노드 이름별 섹션)
@@ -135,6 +136,8 @@ def generate_launch_description():
         DeclareLaunchArgument('start_x', default_value='0.74', description='시뮬 출발 자세 (params_sim robot.start_*) — 가짜 검출용'),
         DeclareLaunchArgument('start_y', default_value='5.58'),
         DeclareLaunchArgument('start_yaw_deg', default_value='0.0'),
+        DeclareLaunchArgument('drive_mode', default_value='ackermann',
+                              description='ackermann (LIMO 아커만 모드, 이 브랜치 기본) | diff (네 바퀴 차동) — 모든 노드에 같이 넘김'),
         DeclareLaunchArgument('odom_topic', default_value='/odom_imu', description='우리 노드가 쓸 오도메트리 (/odom_imu = 휠 거리 + IMU 방향, /odom = 휠만)'),
         DeclareLaunchArgument('params', default_value='', description='모든 노드에 덮어쓸 yaml, 쉼표로 여러 개 (실차: autorace_bringup/config/real_limo.yaml)'),
         DeclareLaunchArgument('mission_params', default_value='', description='mission_manager 설정을 덮어쓸 yaml (시험용)'),

@@ -39,7 +39,7 @@ parking_controller:
     depth_tol_m: 0.02
     corner_min_m: 0.03                  # 모서리 → 선 여유가 이보다 작으면 앞뒤 보정
     max_fix: 2
-    hold_s: 2.5                         # 주차 뒤 정지
+    hold_s: 3.0                         # 주차 뒤 정지 (사용자 11-10: 3 초)
     exit_speed: 0.20
     stuck_s: 1.0                        # 움직이라는데 이만큼 못 움직이면 정렬부터 다시
     max_retry: 3

@@ -115,6 +115,11 @@ class MissionManager(Node):
         p('m5_confirm_frames', 3)
         p('m5_speed', 0.15)
         p('m5_release_m', 1.5)
+        p('m5_at_line', True)              # 표지판을 보면 바로가 아니라 서행 구간 시작 흰 정지선에 차 앞이 닿을 때 서행 (사용자 11-10:
+                                           # 출발부터 slow 가 아니라 정지선부터. 트랙: 출발 x 0.74, 정지선 2.52, slow 표지판 2.75)
+        p('m5_line_wait_m', 2.2)           #   표지판 확인 뒤 이만큼 가도록 정지선을 못 보면 그 자리에서 서행 (버리지 않음 — 사용자 11-10)
+        p('m5_line_min_m', 0.5)            #   표지판 본 자리에서 이보다 가까운 가로선은 출발선으로 보고 안 씀
+        p('m5_near_box_px', 100)           #   정지선을 못 봤어도 표지판 박스가 이만큼 크면 (바로 옆) 서행
         # M6 서행 유도선 (지그재그)
         p('m6_resid_on', 7.5)              # [px] 시뮬: 지그재그 8.0–8.7, 직선 2.2–2.4, 코너 ≤ 6.9
         p('m6_resid_off', 5.0)
@@ -235,6 +240,8 @@ class MissionManager(Node):
                                            # (2D 시뮬 11-09 c8: s 5.32 에서 시작해 분리대 위 (4.02, 0.73) 로 지나감)
         p('m7_ack_final_ignore_lock', True)  # 아커만: 갈림길 잠금 (표지판 45 px, 분리대 1.3~1.8 m 앞) 뒤에도 마지막 차로 옮기기 — 아커만은
                                            # 차로 변경이 느려 잠금이 먼저 걸려 가운데 차로로 끝남 (2D 시뮬 11-09 d4·d8 M2 실패). S 자 0.9 m 는 들어감
+        p('m7_ack_island', True)           # 아커만: 갈림길 분리대 (가운데 차로 끝 쐐기 섬) 를 M7 벽으로 — 있으면 잠금 뒤 옮기기 거리 제한 없음
+        p('m7_ack_island_nose_m', 4.30)    #   입구 흰 가로선 → 섬 코 (도면 4.39, 여유 0.09). 코에서 0.25 m 동안 45° 로 폭 0.5 까지
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
         p('m7_failed_keep_m', 0.6)        # 같은 자리 실패 뒤 반대쪽 재시도: 실패한 곳 + 이 거리까지 그 차로를 다시 고르지 않음
         p('m7_lidar_trim', True)           # 라이다 가까운 기억 상자는 차를 향한 면을 라이다 점까지 줄임 (실차 11-06)
@@ -410,6 +417,7 @@ class MissionManager(Node):
         self._hit_win = {}
         self._resid_hits = 0
         self._m5_seen = self._m5_start = None
+        self._m5_arm = None                # 서행 표지판 봄 → 정지선 기다리는 중 {'pos', 'why', 'line'}
         self._m6_last_zig = self._m6_start = None
         self._m3 = {}                      # 이번 M3 의 기록
         self._m3_cooldown_from = None
@@ -596,9 +604,20 @@ class MissionManager(Node):
             # 서행 구간은 출발 직후 — 횡단보도 (M3) 를 지난 뒤 서행 표지판은 오인식 (2D 시뮬 11-09 m2: 코너 직후 가짜 slow 153px
             # 로 M5 가 켜져 M7 이 안 켜지고 LIMO 에 부딪힘, 실차 11-05 run4 도 3차선에서 큰 가짜 박스)
             best = max(m5, key=lambda d: d.confidence)
-            self._m5_seen = self._m5_start = self._pos
-            self.set_state('M5_SLOW', f'{best.label} {best.confidence:.2f} 박스 높이 {best.y2 - best.y1}px, '
-                                      f'최근 {g("sign_window_frames")} 장 중 {self._hits["m5"]} 장, odom {self.fmt(self._pos)}')
+            px = best.y2 - best.y1
+            why = (f'{best.label} {best.confidence:.2f} 박스 높이 {px}px, '
+                   f'최근 {g("sign_window_frames")} 장 중 {self._hits["m5"]} 장')
+            self._m5_seen = self._pos
+            line_seen = self._m5_arm is not None and self._m5_arm['line'] is not None
+            if g('m5_at_line') and (px < g('m5_near_box_px') or line_seen):   # 정지선을 봤으면 박스가 커도 정지선까지
+                if self._m5_arm is None and self._pos is not None:   # 위치가 들어오기 전이면 다음 장에서
+                    self._m5_arm = {'pos': self._pos, 'why': why, 'line': None}
+                    self.get_logger().info(f'[M5] 서행 표지판 봄 ({why}, odom {self.fmt(self._pos)}) — 정지선까지 평소 속도')
+                return
+            self._m5_arm = None
+            self._m5_start = self._pos
+            self.set_state('M5_SLOW', why + (f' (정지선 못 봤지만 표지판 {px}px 가까움)' if g('m5_at_line') else '')
+                           + f', odom {self.fmt(self._pos)}')
 
     def m2_update(self, msg):
         """갈림길 표지판 결과 기억 — 같은 결과 m2_confirm_frames 장 연속이면 채택, 다른 결과가 다시 확인되면 바꾼다 (마지막 것을 따름)."""
@@ -660,6 +679,17 @@ class MissionManager(Node):
                     if (abs(msg.curvature) < g('m7_entry_fix_curv') and msg.width_near_px > 0 and msg.width_far_px > 0
                             and abs(msg.width_near_px - msg.width_far_px) <= g('m7_entry_fix_parallel_px')):
                         self._entry_ctr.append(pt)  # 곧고 평행 = 코너·깔때기 아닌 1차로
+        # M5: 서행 표지판을 본 뒤 앞 흰 가로선 = 서행 구간 시작 — odom 점으로 기억 (가까워지면 카메라에서 사라짐)
+        a = self._m5_arm
+        if a is not None and msg.stop_line_dist_m > 0 and self.state == 'LANE':
+            pose = self.pose_at(stamp_s(msg.header))
+            if pose is not None:
+                d = g('m7_cam_x') + msg.stop_line_dist_m
+                pt = (pose[0] + d * math.cos(pose[2]), pose[1] + d * math.sin(pose[2]))
+                if math.dist(pt, a['pos']) >= g('m5_line_min_m'):
+                    if a['line'] is None:
+                        self.get_logger().info(f'[M5] 서행 구간 정지선 보임: 카메라에서 {msg.stop_line_dist_m:.2f} m')
+                    a['line'] = pt
         # 3차선 입구 흰 가로선 기억 (M3 를 지난 뒤, M7 전) — odom 점으로. 코너에서 막 나와 비스듬해도 잡히면 씀
         if (msg.stop_line_dist_m > 0 and self._m3_done and not self._m7_done and self.state in ('LANE',) + SLOW_STATES
                 and self._m3_exit_far()):
@@ -1661,6 +1691,21 @@ class MissionManager(Node):
                 # 차 중심보다 완전히 뒤에 있는 깔때기 조각은 제자리 회전 검사에서 뺀다 — 목표 차로 가운데까지 간 뒤 뒷모서리가
                 # 지나온 깔때기 벽에 걸려 어느 쪽으로도 못 돌고 후진 (2D 시뮬 11-09 q2·q3: s 1.07 에서 '회전 막힘' 전 방향)
                 behind = [b for b in ew if b[1] < sc]
+        island = []
+        if self.ack() and g('m7_ack_island') and sc > m.get('island_off_until', -1.0):
+            # 분리대 섬: 가운데 차로 끝에서 시작하는 쐐기 (코 한 점 → 0.25 m 뒤 폭 0.5). 막는 게 아니라 '섬 가장자리를 피하는'
+            # 경로를 기준 S 자가 찾게 — 마지막 줄이 양 끝 차로를 막은 배치 (2D 시뮬 11-10 r5·r7) 에서 섬 옆으로 늦게 옮기기
+            end = m.get('bar_s')
+            # 가로선을 못 봤으면 (켜진 자리 기준) 앞뒤 오차가 커서 여유를 0.11 m 더
+            s_nose = (g('m7_entry_single_m') - 0.11 if end is None else end) + g('m7_ack_island_nose_m')
+            if sc > s_nose - 2.5:
+                lm, step = self.m7_lane_l(1), 0.05
+                for i in range(5):
+                    hw = (i + 1) * step
+                    island.append((s_nose + i * step, s_nose + (i + 1) * step, lm - hw, lm + hw))
+                island.append((s_nose + 0.25, s_nose + 1.8, lm - 0.25, lm + 0.25))
+                near = near + island
+                walls = walls + island
         if g('m7_lidar_clear'):
             self.m7_lidar_clear(sc, lc, psi, wz)
         k_lim = lambda x: max(-g('m7_max_w'), min(g('m7_max_w'), x))   # noqa: E731
@@ -1852,6 +1897,15 @@ class MissionManager(Node):
         if self.ack():
             # 4a) 아커만: 원호 두 개 (첫 원호 → 둘째 원호) 후보 중 안 닿고 목표 차로 가운데·차로 방향에 가장 가까워지는 것
             v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing, funnel, outer)
+            if blocked and island:
+                # 섬 때문에만 막혔으면 (격자가 한 차로 밀려 섬이 목표 차로에 놓인 경우 등) 섬을 빼고 다시 — 0.5 m 동안 섬 끔
+                isl = set(island)
+                v2, w2, b2_, msg2 = self.m7_ack_step(sc, lc, psi, lt, k, [b for b in near if b not in isl], changing, funnel, outer)
+                if not b2_:
+                    m['island_off_until'] = sc + 0.5
+                    m['ack_ref_key'] = None
+                    self.get_logger().warn(f'[M7] 분리대 섬 벽 때문에만 막힘 — 섬 빼고 진행 (s {sc:.2f} ~ {sc + 0.5:.2f})')
+                    v, w, blocked, blk_msg = v2, w2, b2_, msg2
         else:
             # 4) 방향·속도: 바라는 방향 (pure pursuit) 에 가까운 후보 중 쓸기 검사로 m7_go_free_m 이상 갈 수 있는 것.
             #    없으면 제자리 회전 (v = 0) 으로 더 멀리 갈 수 있는 방향, 그것도 없으면 막힘
@@ -1937,7 +1991,7 @@ class MissionManager(Node):
         if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and abs(k - goal) == 1
                 and not m.get('final_shift')
                 and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)
-                                                and self.dist_from(self._m2.get('lock_pos')) < g('m7_ack_final_after_lock_m')))
+                                                and (island or self.dist_from(self._m2.get('lock_pos')) < g('m7_ack_final_after_lock_m'))))
                 and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
@@ -1954,6 +2008,12 @@ class MissionManager(Node):
                                    f'구간 {sc:.2f} m{" (안전장치 거리)" if sc > g("m7_max_m") else ""} → 슬라이딩 윈도우 리셋')
             self._m7_done = True
             self.m2_commit(k)
+
+    def m3_floor(self):
+        """정지선 접근 최저 속도. 아커만은 ack_min_speed 아래로 안 내림 — 모터 데드존 (실차 가정 2: 0.04) 이하 명령이면
+        정지선 8 cm 앞에서 안 움직이고 서 버림 (2D 시뮬 11-10 q8)."""
+        v = self.get_parameter('m3_min_speed').value
+        return max(v, self.get_parameter('ack_min_speed').value) if self.ack() else v
 
     def not_at_edge(self, goal):
         """카메라로 '아직 목표 쪽 끝 차로가 아님' 확인: 최근 프레임 중 차선을 잡은 게 6 장 이상이고, 목표 쪽 노란 선만 보인
@@ -2548,7 +2608,7 @@ class MissionManager(Node):
                 cmd.stop = True
                 self.set_state('M1_STOP', f'정지 목표 도달 (남은 거리 {remain * 100:+.1f} cm), 정지 — {self.m1_light_desc()}')
             else:
-                cmd.max_speed = float(min(g('m1_approach_speed'), max(g('m3_min_speed'), g('m3_kp') * remain)))
+                cmd.max_speed = float(min(g('m1_approach_speed'), max(self.m3_floor(), g('m3_kp') * remain)))
         elif s == 'M1_STOP':
             cmd.stop = True
             if 'still_t' not in m and self._speed < g('m3_still_mps'):
@@ -2592,6 +2652,27 @@ class MissionManager(Node):
         now = self.get_clock().now().nanoseconds * 1e-9
         cmd = LaneCmd(follow='both')
         s = self.state
+        a = self._m5_arm
+        if a is not None and s != 'LANE':
+            self._m5_arm = None            # 다른 미션이 먼저 켜짐
+        elif a is not None and self._pos is not None:
+            if a['line'] is not None:
+                yw = self._yaw
+                ahead = ((a['line'][0] - self._pos[0]) * math.cos(yw) + (a['line'][1] - self._pos[1]) * math.sin(yw))
+                if ahead <= CAR_HALF_L:
+                    self._m5_arm = None
+                    self._m5_start = self._pos
+                    self._m5_seen = self._pos   # 해제 거리는 서행 구간 시작부터도 셈
+                    self.set_state('M5_SLOW', f'{a["why"]} → 정지선에 차 앞 닿음, odom {self.fmt(self._pos)}')
+                    s = self.state
+            elif self.dist_from(a['pos']) > g('m5_line_wait_m'):
+                # 정지선을 못 봤어도 버리지 않고 여기서 서행 — 진짜 표지판을 버리면 미션 0 점, 엉뚱한 곳 서행은 감점 없음 (랩타임 채점 없음).
+                # 사용자 11-10 결정 (다른 세션 제안)
+                self._m5_arm = None
+                self._m5_start = self._m5_seen = self._pos
+                self.set_state('M5_SLOW', f'{a["why"]} → {g("m5_line_wait_m")} m 안에 정지선 못 봄, 안전하게 여기서 서행, '
+                                          f'odom {self.fmt(self._pos)}')
+                s = self.state
         if s == 'M5_SLOW':
             since = self.dist_from(self._m5_seen)
             if since >= g('m5_release_m'):
@@ -2618,7 +2699,7 @@ class MissionManager(Node):
                 cmd.stop = True
                 self.set_state('M3_STOP', f'정지 목표 도달 (남은 거리 {remain * 100:+.1f} cm), 정지 명령, odom {self.fmt(self._pos)}')
             else:
-                cmd.max_speed = float(min(g('m3_approach_speed'), max(g('m3_min_speed'), g('m3_kp') * remain)))
+                cmd.max_speed = float(min(g('m3_approach_speed'), max(self.m3_floor(), g('m3_kp') * remain)))
         elif s == 'M3_STOP':
             cmd.stop = True
             if 'still_t' not in self._m3 and self._speed < g('m3_still_mps'):
