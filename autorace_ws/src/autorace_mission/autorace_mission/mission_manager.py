@@ -217,6 +217,8 @@ class MissionManager(Node):
         p('m7_stop_gap_m', 0.07)           # 쓸기 검사 거리 (차 + m7_margin_m) 가 이보다 짧으면 그 방향으로 안 감
         p('m7_avoid_far_side', True)      # M2: 표지판 반대쪽 끝 차로 (A 면 2, B 면 0) 는 다른 후보가 없을 때만
         p('m7_ack_back_lidar_free_m', 0.25) # 아커만 후진: 뒤 라이다가 이만큼 비었으면 뒤 기억 장애물은 무시
+        p('m7_ack_final_after_lock_m', 0.2)  # 잠금 뒤 옮기기는 잠금 자리에서 이만큼 안에서 시작할 때만 — 늦게 시작하면 분리대 코를 밟음
+                                           # (2D 시뮬 11-09 c8: s 5.32 에서 시작해 분리대 위 (4.02, 0.73) 로 지나감)
         p('m7_ack_final_ignore_lock', True)  # 아커만: 갈림길 잠금 (표지판 45 px, 분리대 1.3~1.8 m 앞) 뒤에도 마지막 차로 옮기기 — 아커만은
                                            # 차로 변경이 느려 잠금이 먼저 걸려 가운데 차로로 끝남 (2D 시뮬 11-09 d4·d8 M2 실패). S 자 0.9 m 는 들어감
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
@@ -1872,7 +1874,8 @@ class MissionManager(Node):
         clear = all(ahead(j) > g('m7_clear_m') for j in range(g('m7_lanes')))
         if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and abs(k - goal) == 1
                 and not m.get('final_shift')
-                and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)))
+                and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)
+                                                and self.dist_from(self._m2.get('lock_pos')) < g('m7_ack_final_after_lock_m')))
                 and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
