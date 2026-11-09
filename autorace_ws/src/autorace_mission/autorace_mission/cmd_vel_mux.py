@@ -45,6 +45,7 @@ class CmdVelMux(Node):
         p('stale_s', 0.3)
         p('selected_topic', '/cmd_vel_mux/selected')
         p('log_period_s', 2.0)             # 0 = 요약 로그 안 냄
+        p('enable', True)                  # false = 어떤 출처든 /cmd_vel 0 (drive.launch enable:=false — 인식·판단만, 바퀴 안 돌림)
         p('stop_eps', 0.01)                # 이보다 작은 |v|, |w| 는 정지 명령
         p('guard_states', ['M7_AVOID'])    # 라이다 안전 정지를 켜는 상태 ([] = 늘)
         p('scan_topic', '/scan')
@@ -181,6 +182,9 @@ class CmdVelMux(Node):
     def emit(self, msg, tag, now):
         """/cmd_vel 과 그 출처를 같이 내고, 정지 명령의 시작·끝을 로그로."""
         msg, tag = self.guard(msg, tag, now)
+        if not self.get_parameter('enable').value:
+            # enable:=false 는 예전엔 lane_follower 에만 가서 mission (M3/M1 접근·M7)·parking 명령은 그대로 나갔음 (다른 세션 지적 11-10)
+            msg, tag = Twist(), f'{tag}+disabled'
         self.pub.publish(msg)
         self.sel_pub.publish(String(data=tag))
         eps = self.get_parameter('stop_eps').value

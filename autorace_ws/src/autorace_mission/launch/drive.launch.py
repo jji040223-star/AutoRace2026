@@ -74,7 +74,7 @@ def _actions(context):
     park = Node(package='autorace_mission', executable='parking_controller', name='parking_controller', output='screen',
                 parameters=[share('autorace_mission', 'config', 'parking_controller.yaml')] + OV + [common])
     mux = Node(package='autorace_mission', executable='cmd_vel_mux', name='cmd_vel_mux', output='screen',
-               parameters=[share('autorace_mission', 'config', 'cmd_vel_mux.yaml')] + OV + [common])
+               parameters=[share('autorace_mission', 'config', 'cmd_vel_mux.yaml')] + OV + [dict(common, enable=arg('enable'))])
     lane = Node(package='autorace_lane', executable='lane_follower', name='lane_follower', output='screen',
                 parameters=[share('autorace_lane', 'config', 'lane_follower.yaml')] + OV + [
                             dict(common, enable=arg('enable'), cmd_vel_topic='/lane/cmd_vel', wait_mission=True)])
