@@ -7,6 +7,12 @@ A=${ACK:+,$PWD/ackermann.yaml}
 # 출발 위치: 기본 = 출발선부터 한 바퀴 전체 (11-09 사용자). START=start_m7.yaml 이면 횡단보도 앞
 ST=$PWD/${START:-start_full.yaml}
 P=${1:-o}
+# 강제 종료된 시뮬이 남긴 FastDDS 공유 메모리 (/dev/shm/fastrtps_*) 가 쌓이면 16 GB 가 차서 노드가 시작하자마자 죽음 (11-09 f 묶음)
+# → 어떤 프로세스도 매핑하지 않은 내 것만 지움
+cat /proc/[0-9]*/maps 2>/dev/null | grep -o "/dev/shm/[^ ]*" | sort -u > /tmp/.shm_used_$$
+for f in /dev/shm/fastrtps_* /dev/shm/sem.fastrtps_*; do
+  [ -O "$f" ] || continue; grep -qx "$f" /tmp/.shm_used_$$ && continue; rm -f -- "$f"
+done; rm -f /tmp/.shm_used_$$
 i=0
 # CDEF=1 이면 s1~s4 를 라바콘 공식 배치 (default, USD S자) 로
 L=${CDEF:+s1_default_cdef s2_default_cdef s3_mirror_cdef s4_mirror_cdef}
