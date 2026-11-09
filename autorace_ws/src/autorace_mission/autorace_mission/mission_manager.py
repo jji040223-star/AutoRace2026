@@ -216,6 +216,8 @@ class MissionManager(Node):
         p('m7_kv', 1.0)                    # 앞 장애물까지 거리 비례 감속 [1/s]
         p('m7_stop_gap_m', 0.07)           # 쓸기 검사 거리 (차 + m7_margin_m) 가 이보다 짧으면 그 방향으로 안 감
         p('m7_avoid_far_side', True)      # M2: 표지판 반대쪽 끝 차로 (A 면 2, B 면 0) 는 다른 후보가 없을 때만
+        p('m7_ack_final_ignore_lock', True)  # 아커만: 갈림길 잠금 (표지판 45 px, 분리대 1.3~1.8 m 앞) 뒤에도 마지막 차로 옮기기 — 아커만은
+                                           # 차로 변경이 느려 잠금이 먼저 걸려 가운데 차로로 끝남 (2D 시뮬 11-09 d4·d8 M2 실패). S 자 0.9 m 는 들어감
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
         p('m7_failed_keep_m', 0.6)        # 같은 자리 실패 뒤 반대쪽 재시도: 실패한 곳 + 이 거리까지 그 차로를 다시 고르지 않음
         p('m7_lidar_trim', True)           # 라이다 가까운 기억 상자는 차를 향한 면을 라이다 점까지 줄임 (실차 11-06)
@@ -1242,7 +1244,7 @@ class MissionManager(Node):
             return P, a
         return None
 
-    def m7_ack_step(self, sc, lc, psi, lt, k, near, changing, funnel=()):
+    def m7_ack_step(self, sc, lc, psi, lt, k, near, changing, funnel=(), outer=()):
         """아커만 M7 한 번: 곡률 후보 (κ1, κ2) 마다 첫 원호 d1 → 둘째 원호 d2 를 굴려 보고 (매 순간 다시 계획 — 조향 지연은
         ack_plan_radius_m 여유로), 첫 원호가 안 닿는 것 중 비용 (끝 옆 오차·방향 오차·둘째 원호에서 막히는 길이) 이 가장 작은 것.
         돌려줌: v, w (= v·κ1), 막힘 여부, 막힘 로그."""
@@ -1257,6 +1259,9 @@ class MissionManager(Node):
         pmax = math.radians(g('m7_ack_max_psi_deg'))
         ref = None
         wheel_walls = []
+        # 바깥 노란 선은 늘 바퀴 규칙 — 몸이 조금 닿으면 escape 가 벽을 통째로 빼서 더 밖으로 나갈 수 있음
+        # (2D 시뮬 11-09 d9·d10: 오른쪽 차로로 S 자 하다 바깥선 규정 이탈 (7.2, 1.65))
+        outer_w = list(outer)
         out_walls = []
         if changing and g('m7_ack_ref'):
             m = self._m7
@@ -1305,6 +1310,8 @@ class MissionManager(Node):
                 bad = hit | (np.abs(P[:, 2]) > pmax)
                 if wheel_walls:
                     bad = bad | self.wheel_out(P, wheel_walls)
+                if outer_w:
+                    bad = bad | self.wheel_out(P, outer_w)
                 fl = float(D[np.argmax(bad)] - D[0]) if bad.any() else float(D[-1])
                 if k2 == K[len(K) // 2]:
                     free1.append((k1, fl))
@@ -1546,6 +1553,7 @@ class MissionManager(Node):
             boxes = [b for b in boxes if inside(b)]
             near = [b for b in near if inside(b)]
         walls = []
+        outer = []                           # 3 차선 바깥 노란 선 (아커만: 몸 벽이 escape 로 빠져도 바퀴 규칙은 늘 지킴)
         funnel = []                          # 입구 1차로·깔때기 가상 벽 (아커만 기준 S 자가 안 들어가면 이것만 빼고 다시 찾음)
         behind = []                          # 입구 벽 중 차 중심보다 완전히 뒤 조각 — 제자리 회전 검사에선 뺀다
         if g('m7_outer_wall'):
@@ -1554,6 +1562,7 @@ class MissionManager(Node):
             hi = self.m7_lane_l(0) + W / 2 + g('m7_outer_wall_off_m')
             lo = self.m7_lane_l(g('m7_lanes') - 1) - W / 2 - g('m7_outer_wall_off_m')
             walls = [(sc - 2.0, sc + 2.0, hi, hi + 0.30), (sc - 2.0, sc + 2.0, lo - 0.30, lo)]
+            outer = list(walls)
             near = near + walls   # 앞뒤 대칭 (벽 안에 들어가 있어도 벽에서 멀어지는 쪽으로는 나감)
         if g('m7_entry_walls'):
             # 3차선 입구 흰 가로선까지는 1차로 (노란 선 둘이 나란함) — 그 양쪽에 가상 벽을 세워 대각으로 꺾지 못하게.
@@ -1772,7 +1781,7 @@ class MissionManager(Node):
         blk_msg = None
         if self.ack():
             # 4a) 아커만: 원호 두 개 (첫 원호 → 둘째 원호) 후보 중 안 닿고 목표 차로 가운데·차로 방향에 가장 가까워지는 것
-            v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing, funnel)
+            v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing, funnel, outer)
         else:
             # 4) 방향·속도: 바라는 방향 (pure pursuit) 에 가까운 후보 중 쓸기 검사로 m7_go_free_m 이상 갈 수 있는 것.
             #    없으면 제자리 회전 (v = 0) 으로 더 멀리 갈 수 있는 방향, 그것도 없으면 막힘
@@ -1856,7 +1865,8 @@ class MissionManager(Node):
         # 끝: 변경이 끝났고 내 차로 앞이 비었고, 다른 차로에도 가까운 장애물이 없을 때 (또는 안전장치 거리)
         clear = all(ahead(j) > g('m7_clear_m') for j in range(g('m7_lanes')))
         if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and abs(k - goal) == 1
-                and not m.get('final_shift') and not self._m2['locked'] and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
+                and not m.get('final_shift') and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock')))
+                and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
             m['final_shift'] = True
