@@ -1,6 +1,7 @@
 # 미션 매니저 (autorace_mission/mission_manager.py). 임시값 = 근거 없이 정한 값, 시뮬·실차에서 맞출 것.
 mission_manager:
   ros__parameters:
+    drive_mode: "ackermann"            # 아커만 워크스페이스 기본 (코드 기본은 diff). 디퍼렌셜은 원래 워크스페이스를 쓸 것
     detections_topic: "/perception/detections"
     lane_state_topic: "/lane/state"
     odom_topic: "/odom"

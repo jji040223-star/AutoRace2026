@@ -6,8 +6,14 @@
   ros2 launch autorace_mission drive.launch.py use_sim_time:=false    # 실차 (리셋 없음)
   ros2 launch autorace_mission drive.launch.py enable:=false          # 인식·판단만, 바퀴는 안 돌림
   ros2 launch autorace_mission drive.launch.py light_source:=fake     # 신호등 박스를 YOLO 대신 시뮬이 아는 위치로 (decoy:=true 면 모니터에도)
-  신호등 박스는 기본 YOLO (traffic_light_yolo = yolo_detector 에 models/traffic_light_yolov8n.pt — red/yellow/green_light,
-  시뮬 영상으로 학습). 시뮬에서는 fake_traffic_light 도 띄워 진짜 신호등 박스를 /perception/traffic_light_truth 로 낸다 (시험 판정용).
+  신호등 박스는 기본 YOLO (traffic_light_yolo = yolo_detector). 모델은 light_model 로 고른다:
+    auto (기본) = 시뮬이면 sim, 실차 (use_sim_time:=false) 면 real
+    sim  = models/traffic_light_yolov8n.pt (red/yellow/green_light, 시뮬 영상으로 학습)
+    real = models/traffic_light_real_yolov8n.pt (red/yellow/green sign, 실물 장난감 신호등 영상으로 학습)
+           + traffic_light 노드에 config/traffic_light_real.yaml (실차 라벨·박스 비율) 을 덮어씀
+    그 밖 = .pt 경로 (예: light_model:=~/models/best.pt). real 과 같은 라벨 (red/yellow/green sign) 이라고 보고 real.yaml 을 씀.
+           라벨이 다르면 light_params:=내설정.yaml 로 color_labels 등을 덮어쓴다.
+  시뮬에서는 fake_traffic_light 도 띄워 진짜 신호등 박스를 /perception/traffic_light_truth 로 낸다 (시험 판정용).
 
 순서:
   1. check_nodes   — 아래 노드가 이미 떠 있으면 시작하지 않는다 (다른 창에 남은 노드가 /cmd_vel 을 같이 냄)
@@ -55,12 +61,25 @@ def _actions(context):
                  parameters=[share('autorace_perception', 'config', 'depth_obstacle.yaml')] + OV + [common])
     lidar = Node(package='autorace_perception', executable='lidar_processor', name='lidar_processor', output='screen',
                  parameters=[share('autorace_perception', 'config', 'lidar_processor.yaml')] + OV + [common])
+    lm = LaunchConfiguration('light_model').perform(context).strip()
+    if lm.lower() in ('', 'auto'):
+        lm = 'sim' if sim else 'real'
+    if lm.lower() == 'sim':
+        light_pt, light_cfg = share('autorace_perception', 'models', 'traffic_light_yolov8n.pt'), []
+    else:
+        light_pt = (share('autorace_perception', 'models', 'traffic_light_real_yolov8n.pt') if lm.lower() == 'real'
+                    else os.path.abspath(os.path.expanduser(lm)))
+        light_cfg = [share('autorace_perception', 'config', 'traffic_light_real.yaml')]
+    if not os.path.isfile(light_pt):
+        raise RuntimeError(f'신호등 YOLO 모델이 없음: {light_pt} (light_model:={lm})')
+    lp = LaunchConfiguration('light_params').perform(context).strip()
+    light_cfg += [os.path.abspath(os.path.expanduser(lp))] if lp else []
     light = Node(package='autorace_perception', executable='traffic_light', name='traffic_light', output='screen',
-                 parameters=[share('autorace_perception', 'config', 'traffic_light.yaml')] + OV + [common])
+                 parameters=[share('autorace_perception', 'config', 'traffic_light.yaml')] + light_cfg + OV + [common])
     src = LaunchConfiguration('light_source').perform(context).lower()
     light_yolo = Node(package='autorace_perception', executable='yolo_detector', name='traffic_light_yolo', output='screen',
                       parameters=[share('autorace_perception', 'config', 'traffic_light_yolo.yaml')] + OV + [
-                                  dict(common, model_path=share('autorace_perception', 'models', 'traffic_light_yolov8n.pt'))])
+                                  dict(common, model_path=light_pt)])
     fake = Node(package='autorace_sim', executable='fake_traffic_light', name='fake_traffic_light', output='screen',
                 parameters=[dict(common, decoy=arg('decoy'),
                                  detections_topic='/perception/traffic_light_detections' if src == 'fake' else '/perception/traffic_light_truth',
@@ -131,6 +150,10 @@ def generate_launch_description():
         DeclareLaunchArgument('reset_sim', default_value='true', description='시뮬에서 출발 전에 LIMO·라바콘·미션 주기를 처음 상태로'),
         DeclareLaunchArgument('enable', default_value='true', description='false = 인식·판단만, /cmd_vel 0'),
         DeclareLaunchArgument('light_source', default_value='yolo', description='신호등 박스: yolo (traffic_light_yolo) | fake (시뮬 위치 투영)'),
+        DeclareLaunchArgument('light_model', default_value='auto',
+                              description='신호등 YOLO: auto (시뮬 sim / 실차 real) | sim | real | .pt 경로'),
+        DeclareLaunchArgument('light_params', default_value='',
+                              description='traffic_light 노드 설정을 덮어쓸 yaml (다른 라벨의 모델을 쓸 때)'),
         DeclareLaunchArgument('decoy', default_value='false', description='light_source:=fake 일 때 가짜 검출이 방해 모니터에도 박스를 냄'),
         DeclareLaunchArgument('start_x', default_value='0.74', description='시뮬 출발 자세 (params_sim robot.start_*) — 가짜 검출용'),
         DeclareLaunchArgument('start_y', default_value='5.58'),

@@ -1,6 +1,7 @@
 # M4 T자 주차·탈출 (autorace_mission/parking_controller.py). 시뮬 칸: 안쪽 500 × 600 mm, 통로 (주차선 → 2차로 바깥 경계) 0.52 m
 parking_controller:
   ros__parameters:
+    drive_mode: "ackermann"            # 아커만 워크스페이스 기본 (코드 기본은 diff). 디퍼렌셜은 원래 워크스페이스를 쓸 것
     standalone: false                   # true = /parking/start 없이 바로 시작 (주차 구역 앞에서). parking.launch 가 true 로
     bay_side: "right"                   # 주차 칸 줄이 진행 방향 어느 쪽 (시뮬: 2차로 +x 로 가면 오른쪽)
     bay_w: 0.50                         # 칸 안쪽 폭 (진행 방향) [m]
