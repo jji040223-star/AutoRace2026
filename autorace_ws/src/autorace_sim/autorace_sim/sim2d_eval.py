@@ -144,6 +144,7 @@ def main():
     s = st['status'] or {}
     res = dict(reason=reason, sim_s=round(t_now() - (st['t0'] or 0.0), 1), dist_m=s.get('dist_m'),
                min_line_m=s.get('min_line_m'), touch_s=s.get('touch_s'), collisions=s.get('collisions'), knocked=s.get('knocked'),
+               lane_out=s.get('lane_out'), lane_out_s=s.get('lane_out_s'), lane_outs=s.get('lane_outs', []),
                mission_states=st['states'].get('mission', []), parking_states=st['states'].get('parking', []),
                parking_result=st['parking_result'], branch=s.get('branch'), final=dict(x=s.get('x'), y=s.get('y')),
                odom_err_m=s.get('odom_err_m'), frames_saved=st['saved'], cells=s.get('cells', {}), stops=s.get('stops', []))
