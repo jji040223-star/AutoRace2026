@@ -836,7 +836,13 @@ class ParkingController(Node):
 
     def rt_build(self):
         """기록한 들어온 길 → 구간별 (길이, 곡률). 되짚기는 끝 구간부터 거꾸로."""
-        tr = self.trace
+        # 5 cm 간격으로 솎음 — 5 mm 간격 방향 차로 곡률을 구하면 IMU 잡음 0.1° 에 κ 잡음 ~0.35 /m (실차 IMU 는 더 거침, 다른 세션)
+        tr = [self.trace[0]]
+        for p_ in self.trace[1:]:
+            if math.dist(tr[-1][:2], p_[:2]) >= 0.05:
+                tr.append(p_)
+        if tr[-1] is not self.trace[-1]:
+            tr.append(self.trace[-1])
         segs = []
         for a, b in zip(tr, tr[1:]):
             ds = math.dist(a[:2], b[:2])
