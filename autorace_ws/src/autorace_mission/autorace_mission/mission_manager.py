@@ -1162,11 +1162,19 @@ class MissionManager(Node):
     def ack(self):
         return self.get_parameter('drive_mode').value == 'ackermann'
 
-    @staticmethod
-    def ack_poses(s0, l0, p0, segs, step=0.025):
-        """(s0, l0, p0) 에서 [(곡률, 길이), ...] 원호를 차례로 갈 때 자세들 (N, 3) 과 각 자세까지 거리."""
+    ACK_L = 0.2                            # LIMO 축간거리 — 아커만 원호는 뒷축 가운데가 그림 (base_link = 뒷축 + L/2 앞)
+    WHEELS = ((0.1, 0.0875), (-0.1, 0.0875), (0.1, -0.0875), (-0.1, -0.0875))   # base_link 기준 바퀴 (앞왼, 뒤왼, 앞오, 뒤오)
+
+    @classmethod
+    def ack_poses(cls, s0, l0, p0, segs, step=0.025):
+        """base_link (s0, l0, p0) 에서 [(곡률, 길이), ...] 원호를 차례로 갈 때 base_link 자세들 (N, 3) 과 거리.
+        곡률·길이는 뒷축 가운데 궤적 기준 (실제 LIMO·sim2d ack_ref rear — 최대 조향에서 몸이 궤적보다 ~11° 안쪽을 봄,
+        다른 세션 검토 11-09: 차 중심 모델이면 S 자 시작점·바퀴 검사가 시뮬과 어긋남)."""
         P, D = [], []
-        s, l, p, dist = s0, l0, p0, 0.0
+        h = cls.ACK_L / 2
+        p = p0
+        s, l = s0 - h * math.cos(p0), l0 - h * math.sin(p0)     # 뒷축 가운데
+        dist = 0.0
         for kap, ln in segs:
             n = max(1, int(round(ln / step)))
             ds = ln / n
@@ -1178,11 +1186,27 @@ class MissionManager(Node):
                     s, l = s + (math.sin(p2) - math.sin(p)) / kap, l - (math.cos(p2) - math.cos(p)) / kap
                     p = p2
                 dist += ds
-                P.append((s, l, p))
+                P.append((s + h * math.cos(p), l + h * math.sin(p), p))
                 D.append(dist)
         return np.array(P), np.array(D)
 
-    def m7_ack_ref(self, sc, lc, psi, lt, boxes, mg):
+    @classmethod
+    def wheel_out(cls, P, walls):
+        """자세마다: 같은 쪽 두 바퀴 (앞·뒤) 가 둘 다 선 밖 (walls 상자 안) 인가 — 규정 차로 이탈 ('한쪽 두 바퀴가 선 밖').
+        몸이나 바퀴 하나가 넘는 건 감점 아님 (다른 세션 검토 11-09)."""
+        if not walls or len(P) == 0:
+            return np.zeros(len(P), bool)
+        W_ = np.array(walls, float)
+        c, s_ = np.cos(P[:, 2]), np.sin(P[:, 2])
+        ins = []
+        for wx, wy in cls.WHEELS:
+            x = P[:, 0] + wx * c - wy * s_
+            y = P[:, 1] + wx * s_ + wy * c
+            ins.append(((x[:, None] > W_[None, :, 0]) & (x[:, None] < W_[None, :, 1])
+                        & (y[:, None] > W_[None, :, 2]) & (y[:, None] < W_[None, :, 3])).any(axis=1))
+        return (ins[0] & ins[1]) | (ins[2] & ins[3])
+
+    def m7_ack_ref(self, sc, lc, psi, lt, boxes, mg, wheel_walls=()):
         """기준 S 자: 지금 자세에서 곧게 a 만큼 → 목표 쪽 원호 (반경 R) → 반대 원호로 방향 0 → 0.3 m 곧게, 끝 옆 = lt.
         a 를 0 부터 0.05 씩 늘려 안 닿는 가장 이른 것 (다른 세션 설계 11-09: 끼는 이유는 결정보다 '꺾기 시작' 이 늦어서 —
         지평선 0.95 m 비용만으로는 S 자 끝을 못 봐서 이른 시작을 안 고름). 지금 방향이 이미 목표 쪽이면 그대로 씀. 없으면 None."""
@@ -1209,6 +1233,8 @@ class MissionManager(Node):
             P, D = self.ack_poses(sc, lc, psi, [sg for sg in segs if sg[1] > 1e-6])
             if boxes and avoid.hits(P, boxes, mg).any():
                 continue
+            if wheel_walls and self.wheel_out(P, wheel_walls).any():
+                continue
             return P, a
         return None
 
@@ -1224,6 +1250,7 @@ class MissionManager(Node):
         mg = np.full(len(boxes), g('m7_margin_m'))
         pmax = math.radians(g('m7_ack_max_psi_deg'))
         ref = None
+        wheel_walls = []
         if changing and g('m7_ack_ref'):
             m = self._m7
             key = (k, round(sc / 0.1))
@@ -1231,22 +1258,30 @@ class MissionManager(Node):
                 m['ack_ref_key'] = key
                 m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, boxes, mg)
                 cross = False
+                fs = set(funnel)
+                b2 = [b for b in boxes if b not in fs]
+                if m['ack_ref'] is None and funnel:
+                    # ② 깔때기는 규정 (같은 쪽 두 바퀴가 선 밖) 으로만 — 몸·바퀴 하나는 넘어도 감점 아님
+                    m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, b2, np.full(len(b2), g('m7_margin_m')), wheel_walls=list(funnel))
+                    if m['ack_ref'] is not None:
+                        cross = 'wheel'
                 if m['ack_ref'] is None and funnel and g('m7_ack_ref_cross_funnel'):
                     # 깔때기 노란 선을 지키면 S 자가 안 들어감 (트랙: 깔때기 끝 x 8.05 → 첫 줄 x 7.85 = 0.2 m, 아커만 S 자 0.84~0.9 m) →
                     # 깔때기 벽만 빼고 (장애물·바깥 벽은 그대로) 다시. 선을 조금 넘을 수 있음 (차로 이탈 −1 위험 < 끼어서 M7 못 끝냄)
-                    fs = set(funnel)
-                    b2 = [b for b in boxes if b not in fs]
                     m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, b2, np.full(len(b2), g('m7_margin_m')))
-                    cross = m['ack_ref'] is not None
+                    cross = 'all' if m['ack_ref'] is not None else False
                 r_ = m['ack_ref']
                 self.m7_mode(f'ref{k}{r_ is None}{cross}', f'기준 S 자 → 차로 {k}: ' + ('안 들어감 (반응형만)' if r_ is None else
-                                                  f'곧게 {r_[1]:.2f} m 뒤 꺾기 시작' + (' (깔때기 선 무시)' if cross else '')))
+                                                  f'곧게 {r_[1]:.2f} m 뒤 꺾기 시작' + {'wheel': ' (깔때기는 바퀴 규칙으로)',
+                                                  'all': ' (깔때기 선 무시 — 차로 이탈 감점 위험)'}.get(cross, '')))
                 m['ack_ref_cross'] = cross
             ref = m.get('ack_ref')
             if ref is not None and m.get('ack_ref_cross') and funnel:
-                fs = set(funnel)              # 기준이 깔때기 선을 넘기로 했으면 후보 검사도 깔때기 벽 없이 (아니면 기준을 못 따라감)
+                fs = set(funnel)              # 기준이 깔때기 몸 벽을 안 지키기로 했으면 후보 검사도 같게 (아니면 기준을 못 따라감)
                 boxes = [b for b in boxes if b not in fs]
                 mg = np.full(len(boxes), g('m7_margin_m'))
+                if m.get('ack_ref_cross') == 'wheel':
+                    wheel_walls = list(funnel)
         best = None
         free1 = []
         for k1 in K:
@@ -1254,6 +1289,8 @@ class MissionManager(Node):
                 P, D = self.ack_poses(sc, lc, psi, [(k1, d1), (k2, d2)])
                 hit = avoid.hits(P, boxes, mg).any(axis=1) if boxes else np.zeros(len(P), bool)
                 bad = hit | (np.abs(P[:, 2]) > pmax)
+                if wheel_walls:
+                    bad = bad | self.wheel_out(P, wheel_walls)
                 fl = float(D[np.argmax(bad)] - D[0]) if bad.any() else float(D[-1])
                 if k2 == K[len(K) // 2]:
                     free1.append((k1, fl))
