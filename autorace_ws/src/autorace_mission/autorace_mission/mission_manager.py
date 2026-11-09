@@ -201,6 +201,8 @@ class MissionManager(Node):
         p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
         p('m7_ack_ref_max_a_m', 1.2)       #   꺾기 시작을 이만큼 뒤까지 찾음
         p('m7_ack_ref_cross_funnel', True) #   깔때기 벽을 지켜선 S 자가 안 들어가면 깔때기 벽만 빼고 다시 찾음
+        p('m7_ack_all_latch_m', 1.0)       #   ③ (깔때기 선 넘기) 로 정하면 이만큼 갈 때까지 유지
+        p('m7_ack_w_out', 2.0)             #   ③ 중 두 바퀴가 선 밖인 길이 벌점 [1/m]
         p('m7_ack_w_ref_head', 0.4)        #   기준 방향과의 차 벌점 [1/rad]
         p('m7_ack_n', 11)                  #   곡률 후보 수 (−1/R ~ +1/R)
         p('m7_ack_w_lat', 2.0)             #   비용: 끝 자리 옆 오차 [1/m]
@@ -1251,25 +1253,31 @@ class MissionManager(Node):
         pmax = math.radians(g('m7_ack_max_psi_deg'))
         ref = None
         wheel_walls = []
+        out_walls = []
         if changing and g('m7_ack_ref'):
             m = self._m7
             key = (k, round(sc / 0.1))
             if m.get('ack_ref_key') != key:
                 m['ack_ref_key'] = key
-                m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, boxes, mg)
-                cross = False
                 fs = set(funnel)
                 b2 = [b for b in boxes if b not in fs]
-                if m['ack_ref'] is None and funnel:
+                latched = m.get('ack_all_until', -1.0) > sc and funnel
+                m['ack_ref'] = None if latched else self.m7_ack_ref(sc, lc, psi, lt, boxes, mg)
+                cross = False
+                if m['ack_ref'] is None and funnel and not latched:
                     # ② 깔때기는 규정 (같은 쪽 두 바퀴가 선 밖) 으로만 — 몸·바퀴 하나는 넘어도 감점 아님
                     m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, b2, np.full(len(b2), g('m7_margin_m')), wheel_walls=list(funnel))
                     if m['ack_ref'] is not None:
                         cross = 'wheel'
-                if m['ack_ref'] is None and funnel and g('m7_ack_ref_cross_funnel'):
+                if m['ack_ref'] is None and funnel and (g('m7_ack_ref_cross_funnel') or latched):
                     # 깔때기 노란 선을 지키면 S 자가 안 들어감 (트랙: 깔때기 끝 x 8.05 → 첫 줄 x 7.85 = 0.2 m, 아커만 S 자 0.84~0.9 m) →
                     # 깔때기 벽만 빼고 (장애물·바깥 벽은 그대로) 다시. 선을 조금 넘을 수 있음 (차로 이탈 −1 위험 < 끼어서 M7 못 끝냄)
                     m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, b2, np.full(len(b2), g('m7_margin_m')))
                     cross = 'all' if m['ack_ref'] is not None else False
+                    if cross and not latched:
+                        # 한 번 ③ 으로 정하면 1 m (첫 줄을 지날 때까지) 유지 — 매 재계획 ①·② 가 될 듯 말 듯하면 선을 들락날락해
+                        # 차로 이탈이 여러 번 (규정: 1 회당 −1) 될 수 있음 (다른 세션 제안 11-09)
+                        m['ack_all_until'] = sc + g('m7_ack_all_latch_m')
                 r_ = m['ack_ref']
                 self.m7_mode(f'ref{k}{r_ is None}{cross}', f'기준 S 자 → 차로 {k}: ' + ('안 들어감 (반응형만)' if r_ is None else
                                                   f'곧게 {r_[1]:.2f} m 뒤 꺾기 시작' + {'wheel': ' (깔때기는 바퀴 규칙으로)',
@@ -1282,6 +1290,8 @@ class MissionManager(Node):
                 mg = np.full(len(boxes), g('m7_margin_m'))
                 if m.get('ack_ref_cross') == 'wheel':
                     wheel_walls = list(funnel)
+                else:
+                    out_walls = list(funnel)  # ③: 두 바퀴 밖 구간이 짧은 쪽을 고르게 비용으로만
         best = None
         free1 = []
         for k1 in K:
@@ -1310,6 +1320,8 @@ class MissionManager(Node):
                     cost_lat = g('m7_ack_w_lat') * abs(lpr - lr) + g('m7_ack_w_ref_head') * abs(pe - pr)
                 else:
                     cost_lat = g('m7_ack_w_lat') * abs(lp - lt)
+                if out_walls:
+                    cost_lat += g('m7_ack_w_out') * float(self.wheel_out(P, out_walls).mean()) * (d1 + d2)
                 cost = (cost_lat + g('m7_ack_w_head') * abs(pe)
                         + g('m7_ack_w_free') * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
                 if best is None or cost < best[0]:
