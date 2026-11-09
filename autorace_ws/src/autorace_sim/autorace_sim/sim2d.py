@@ -138,6 +138,12 @@ class Sim2D(Node):
         p('wheelbase', 0.2)                # LIMO 축간거리 [m]
         p('ack_min_radius', 0.47)          # 최소 회전 반경 [m] (안쪽 바퀴 최대 28°, 윤거 0.172 → 차 중심 반경 ≈ 0.46~0.48)
         p('steer_tau', 0.08)               # 조향 서보 지연 [s]
+        # 기준점: rear = 뒷축 가운데가 v 로 가고 뒷바퀴는 옆으로 안 미끄러짐 (실제 앞바퀴 조향 차. base_link = 뒷축 + L/2 앞이라
+        # 몸이 궤적보다 안쪽을 봄 — 최대 조향에서 ~12°). center = 예전 모델 (base_link 가 자전거 기준점, 미끄럼각 0) — 비교용.
+        # limo_base 의 r = v / w 도 뒷축 기준으로 봄 (agilex limo_driver 의 안쪽 바퀴 각 atan(L / (r − 윤거/2)) — 실차에서 확인할 것)
+        p('ack_ref', 'rear')
+        p('ack_steer_scale', 1.0)          # 실제 조향각 = 명령 조향각 × 이것 (서보·링크 오차로 덜 꺾임 < 1 — '실차가 덜 도는' 상황 재현).
+                                           # 최대 조향도 같이 줄어 실제 최소 반경 = L / tan(scale · atan(L / ack_min_radius))
         p('odom_v_scale', 1.0)
         p('odom_w_scale', 1.0)
         p('imu_noise', 0.002)
@@ -276,6 +282,12 @@ class Sim2D(Node):
         self.raster = img
         # 노란 선까지 거리 [m] (바퀴가 선을 밟는지 판정)
         self.yellow_dist = cv2.distanceTransform(255 - yellow, cv2.DIST_L2, 5).astype(np.float32) * res
+        # 선 밖 (트랙 데이터 off_road·island = 노란 선 바깥) — 규정 차선 이탈 판정 (한쪽 두 바퀴가 선 밖) 용
+        off = np.zeros((h, w), np.uint8)
+        for e in self.track['elements']:
+            if e['class'] in ('off_road', 'island'):
+                cv2.fillPoly(off, [px(e['exterior'])] + [px(hl) for hl in e.get('holes', [])], 255)
+        self.off_mask = off > 0
 
     def world_px(self, x, y):
         return (x - self.x0) / self.res, (self.ytop - y) / self.res
@@ -577,9 +589,10 @@ class Sim2D(Node):
                 dc = math.copysign(dmax, wc)
             else:
                 dc = max(-dmax, min(dmax, math.atan(L * wc / vc)))
+            dc *= g('ack_steer_scale')
             self.steer = getattr(self, 'steer', 0.0)
             self.steer += (dc - self.steer) * min(1.0, dt / g('steer_tau'))
-            self.w = self.v * math.tan(self.steer) / L
+            self.w = self.v * math.tan(self.steer) / L     # rear: v = 뒷축 속도 → 명령 w 가 그대로 방향 변화율 (잘리지 않으면)
         else:
             self.w += (wc - self.w) * min(1.0, dt / g('tau_w'))
         # 바퀴 헛돎: 빠른 제자리 회전이면 바퀴는 도는데 몸체는 덜 돎 (휠 odom 은 바퀴, IMU 는 몸체)
@@ -592,8 +605,16 @@ class Sim2D(Node):
         self._pivot = pivot
         bw = self.w * g('pivot_slip_ratio') if (pivot and self._slip) else self.w
         nyaw = wrap(self.yaw + bw * dt)
-        nx = self.x + self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
-        ny = self.y + self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
+        if g('drive_mode') == 'ackermann' and g('ack_ref') == 'rear':
+            # 뒷축 가운데를 v 로 적분하고 base_link 는 그 L/2 앞 — 몸 가운데는 옆으로도 움직임 (미끄럼각 atan(tanδ / 2))
+            hl = 0.5 * g('wheelbase')
+            rx, ry = self.x - hl * math.cos(self.yaw), self.y - hl * math.sin(self.yaw)
+            rx += self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
+            ry += self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
+            nx, ny = rx + hl * math.cos(nyaw), ry + hl * math.sin(nyaw)
+        else:
+            nx = self.x + self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
+            ny = self.y + self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
         rect = self.car_rect(nx, ny, nyaw)
         blocked = None
         for b in self.boxes:
@@ -663,19 +684,41 @@ class Sim2D(Node):
     # ------------------------------------------------------------------ 기록
     def stats_reset(self):
         self.stats = {'min_line_m': float('inf'), 'touch_s': 0.0, 'dist_m': 0.0, 'since': getattr(self, 'sim_t', 0.0),
+                      'lane_out': 0, 'lane_out_s': 0.0,   # 규정 차선 이탈 (한쪽 두 바퀴가 선 밖) 횟수·시간 — 라바콘 구간 면제는 위치로 거를 것
+                      'lane_outs': [],       # [x, y, 쪽 L/R] (처음 30 번)
                       'cells': {},           # 1 m 칸 'x,y' → [그 칸에서 바퀴~노란 선 최소 거리, 선 밟은 시간]
                       'stops': []}           # 정지선 앞에서 멈출 때마다 바퀴 맨 앞 → 정지선 가까운 끝 [m] (음수 = 밟음)
         self._still_s, self._stop_logged = 0.0, False
         self.prev_xy = None
+        self._out_armed, self._out_side = False, None
 
     def track_stats(self, dt):
         dmin = float('inf')
         c, s = math.cos(self.yaw), math.sin(self.yaw)
+        out = []                             # WHEELS 순서: 앞왼, 앞오, 뒤왼, 뒤오
         for wx, wy in WHEELS:
             px, py = self.world_px(self.x + wx * c - wy * s, self.y + wx * s + wy * c)
             i, j = int(py), int(px)
             if 0 <= i < self.yellow_dist.shape[0] and 0 <= j < self.yellow_dist.shape[1]:
                 dmin = min(dmin, float(self.yellow_dist[i, j]))
+                out.append(bool(self.off_mask[i, j]))
+            else:
+                out.append(True)
+        # 규정 차선 이탈: 한쪽 (왼쪽 두 바퀴 또는 오른쪽 두 바퀴) 이 모두 선 밖. 출발 칸은 트랙 데이터에서 off_road 라
+        # 네 바퀴가 한 번 다 트랙 안에 들어온 뒤부터 셈
+        if not getattr(self, '_out_armed', False):
+            self._out_armed = not any(out)
+        else:
+            side = 'L' if (out[0] and out[2]) else 'R' if (out[1] and out[3]) else None
+            if side is not None:
+                self.stats['lane_out_s'] += dt
+            if side is not None and getattr(self, '_out_side', None) is None:
+                self.stats['lane_out'] += 1
+                if len(self.stats['lane_outs']) < 30:
+                    self.stats['lane_outs'].append([round(self.x, 2), round(self.y, 2), side])
+                self.get_logger().warn(f'[sim2d] 차선 이탈 (규정: {"왼" if side == "L" else "오른"}쪽 두 바퀴가 선 밖) — 차 '
+                                       f'({self.x:.2f}, {self.y:.2f}) yaw {math.degrees(self.yaw):.0f}°, {self.stats["lane_out"]} 번째')
+            self._out_side = side
         self.last_line = dmin
         self.stats['min_line_m'] = min(self.stats['min_line_m'], dmin)
         touching = dmin < 0.02              # 바퀴 접지 반폭 (~2 cm) 안에 노란 선
@@ -730,6 +773,7 @@ class Sim2D(Node):
         d = dict(t=round(self.sim_t, 2), x=round(self.x, 3), y=round(self.y, 3), yaw_deg=round(math.degrees(self.yaw), 1),
                  v=round(self.v, 3), w=round(self.w, 3), line_now_m=round(self.last_line, 3),
                  min_line_m=round(self.stats['min_line_m'], 3), touch_s=round(self.stats['touch_s'], 2),
+                 lane_out=self.stats['lane_out'], lane_out_s=round(self.stats['lane_out_s'], 2), lane_outs=self.stats['lane_outs'],
                  dist_m=round(self.stats['dist_m'], 2), collisions=dict(self.hits), knocked=sorted(self.knocked),
                  cells={k: [round(v[0], 3), round(v[1], 2)] for k, v in self.stats['cells'].items()},
                  stops=self.stats['stops'],

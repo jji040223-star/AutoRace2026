@@ -195,12 +195,27 @@ class MissionManager(Node):
         p('ack_plan_radius_m', 0.52)       # 경로 계획에 쓰는 최소 반경 (조향 지연·오차 여유)
         p('m7_ack_d1_m', 0.25)             # 아커만 M7: 첫 원호 길이 (매 순간 다시 계획 — 이 원호의 곡률로 운전)
         p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
+        p('m8_ack_outer_bias_m', 0.05)     # 아커만 M8: 본 라바콘이 m8_ack_outer_bias_after 개 넘으면 (마지막 문들) 목표를 왼쪽으로 이만큼
+        p('m8_ack_outer_bias_after', 10)
+        p('m8_ack_corner_assist', True)    # 아커만 M8 출구에서 차선 쌍이 안 보이면 최대 오른쪽으로 코너 보조
+        p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
+        p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
+        p('m8_ack_assist_axis_deg', 12.0)  #   트랙 축 (주차 직선 방향) 에서 이 안이면 보조 끝
+        p('m8_ack_assist_s', 6.0)          #   길어야 이만큼 (반경 0.47 로 90° = 0.74 m, 0.15 m/s 면 4.9 s — 3 s 면 늘 시간으로 끝났음, 다른 세션)
+        p('m8_ack_exit_deg', 15.0)         # 아커만 M8 출구: 방향이 이 안이면 (옆 오차 무시) 바로 차선 추종에 넘김
+        p('m8_ack_exit_s', 1.0)            #   길어야 이만큼
         p('m8_ack_arcs', False)            # 아커만 M8: 원호 후보로 고르기 (2D 시뮬 11-09 j: 매 순간 0.35 m 만 봐서 휜 통로 앞에서 막혀
                                            # 후진 8~17 번 → 끔, 예전 틈 가운데 추종 + 조향 후진·출구 추종만)
         p('m8_ack_arc_m', 0.35)            # 아커만 M8: 원호 검사 길이
+        p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
+        p('m7_ack_ref_max_a_m', 1.2)       #   꺾기 시작을 이만큼 뒤까지 찾음
+        p('m7_ack_ref_cross_funnel', True) #   깔때기 벽을 지켜선 S 자가 안 들어가면 깔때기 벽만 빼고 다시 찾음
+        p('m7_ack_all_latch_m', 1.0)       #   ③ (깔때기 선 넘기) 로 정하면 이만큼 갈 때까지 유지
+        p('m7_ack_w_out', 2.0)             #   ③ 중 두 바퀴가 선 밖인 길이 벌점 [1/m]
+        p('m7_ack_w_ref_head', 0.4)        #   기준 방향과의 차 벌점 [1/rad]
         p('m7_ack_n', 11)                  #   곡률 후보 수 (−1/R ~ +1/R)
         p('m7_ack_w_lat', 2.0)             #   비용: 끝 자리 옆 오차 [1/m]
-        p('m7_ack_w_head', 0.8)            #   비용: 끝 방향 오차 [1/rad]
+        p('m7_ack_w_head', 0.15)           #   비용: 끝 방향 오차 [1/rad] (옆 오차는 펴는 거리까지 투영해서 봄 → 작게)
         p('m7_ack_w_free', 3.0)            #   비용: 둘째 원호에서 막혀 못 가는 길이 [1/m]
         p('m7_ack_max_psi_deg', 70.0)      #   차로 방향과 이보다 틀어지는 경로는 안 씀
         p('m7_speed', 0.15)
@@ -208,6 +223,13 @@ class MissionManager(Node):
         p('m7_kv', 1.0)                    # 앞 장애물까지 거리 비례 감속 [1/s]
         p('m7_stop_gap_m', 0.07)           # 쓸기 검사 거리 (차 + m7_margin_m) 가 이보다 짧으면 그 방향으로 안 감
         p('m7_avoid_far_side', True)      # M2: 표지판 반대쪽 끝 차로 (A 면 2, B 면 0) 는 다른 후보가 없을 때만
+        p('m7_ack_back_limit_m', 0.5)      # 아커만 후진: 지금까지 간 가장 먼 s 보다 이만큼 넘게 뒤로는 안 감 (c9 트랙 밖까지 후진)
+        p('m7_ack_retry_progress_m', 0.2)  # 아커만: 가장 먼 s 가 이만큼 안 늘었으면 같은 자리 재시도로 셈
+        p('m7_ack_back_lidar_free_m', 0.25) # 아커만 후진: 뒤 라이다가 이만큼 비었으면 뒤 기억 장애물은 무시
+        p('m7_ack_final_after_lock_m', 0.2)  # 잠금 뒤 옮기기는 잠금 자리에서 이만큼 안에서 시작할 때만 — 늦게 시작하면 분리대 코를 밟음
+                                           # (2D 시뮬 11-09 c8: s 5.32 에서 시작해 분리대 위 (4.02, 0.73) 로 지나감)
+        p('m7_ack_final_ignore_lock', True)  # 아커만: 갈림길 잠금 (표지판 45 px, 분리대 1.3~1.8 m 앞) 뒤에도 마지막 차로 옮기기 — 아커만은
+                                           # 차로 변경이 느려 잠금이 먼저 걸려 가운데 차로로 끝남 (2D 시뮬 11-09 d4·d8 M2 실패). S 자 0.9 m 는 들어감
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
         p('m7_failed_keep_m', 0.6)        # 같은 자리 실패 뒤 반대쪽 재시도: 실패한 곳 + 이 거리까지 그 차로를 다시 고르지 않음
         p('m7_lidar_trim', True)           # 라이다 가까운 기억 상자는 차를 향한 면을 라이다 점까지 줄임 (실차 11-06)
@@ -404,6 +426,7 @@ class MissionManager(Node):
                      'dirs': collections.deque(maxlen=60), 'seen_at': None}   # M7 없이 M2 (m2_without_m7)
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
         self._bar_pt = None                               # M7 전에 본 3차선 입구 흰 가로선 (odom)
+        self._ys = collections.deque(maxlen=12)          # 최근 (차선 찾음, yellow_side) — 잠금 뒤 차로 옮기기 전 확인
         self._entry_ctr = collections.deque(maxlen=60)   # 위 점 중 곧고 두 선이 평행한 장면만 (3차선 입구 앞 1차로) — M7 격자 기준
         self._line_ctr = collections.deque(maxlen=40)    # 위 점 중 흰 가로선 (3차선 입구 선) 이 보일 때 잰 것만 — M7 격자 기준
         self._lane_ctr = collections.deque(maxlen=60)    # 최근 1차로 가운데 점 (odom 좌표) — 노란 선 양쪽을 잡은 프레임만 (M7 격자 맞춤)
@@ -611,6 +634,7 @@ class MissionManager(Node):
         return self.get_parameter('m7_prefer').value
 
     def on_lane_state(self, msg):
+        self._ys.append((bool(msg.found), int(msg.yellow_side)))
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self._lane = msg
         if msg.yellow_side != 0 and 0.0 < msg.line_resid_px < g('m6_resid_off'):
@@ -1158,11 +1182,19 @@ class MissionManager(Node):
     def ack(self):
         return self.get_parameter('drive_mode').value == 'ackermann'
 
-    @staticmethod
-    def ack_poses(s0, l0, p0, segs, step=0.025):
-        """(s0, l0, p0) 에서 [(곡률, 길이), ...] 원호를 차례로 갈 때 자세들 (N, 3) 과 각 자세까지 거리."""
+    ACK_L = 0.2                            # LIMO 축간거리 — 아커만 원호는 뒷축 가운데가 그림 (base_link = 뒷축 + L/2 앞)
+    WHEELS = ((0.1, 0.0875), (-0.1, 0.0875), (0.1, -0.0875), (-0.1, -0.0875))   # base_link 기준 바퀴 (앞왼, 뒤왼, 앞오, 뒤오)
+
+    @classmethod
+    def ack_poses(cls, s0, l0, p0, segs, step=0.025):
+        """base_link (s0, l0, p0) 에서 [(곡률, 길이), ...] 원호를 차례로 갈 때 base_link 자세들 (N, 3) 과 거리.
+        곡률·길이는 뒷축 가운데 궤적 기준 (실제 LIMO·sim2d ack_ref rear — 최대 조향에서 몸이 궤적보다 ~11° 안쪽을 봄,
+        다른 세션 검토 11-09: 차 중심 모델이면 S 자 시작점·바퀴 검사가 시뮬과 어긋남)."""
         P, D = [], []
-        s, l, p, dist = s0, l0, p0, 0.0
+        h = cls.ACK_L / 2
+        p = p0
+        s, l = s0 - h * math.cos(p0), l0 - h * math.sin(p0)     # 뒷축 가운데
+        dist = 0.0
         for kap, ln in segs:
             n = max(1, int(round(ln / step)))
             ds = ln / n
@@ -1174,11 +1206,59 @@ class MissionManager(Node):
                     s, l = s + (math.sin(p2) - math.sin(p)) / kap, l - (math.cos(p2) - math.cos(p)) / kap
                     p = p2
                 dist += ds
-                P.append((s, l, p))
+                P.append((s + h * math.cos(p), l + h * math.sin(p), p))
                 D.append(dist)
         return np.array(P), np.array(D)
 
-    def m7_ack_step(self, sc, lc, psi, lt, k, near, changing):
+    @classmethod
+    def wheel_out(cls, P, walls):
+        """자세마다: 같은 쪽 두 바퀴 (앞·뒤) 가 둘 다 선 밖 (walls 상자 안) 인가 — 규정 차로 이탈 ('한쪽 두 바퀴가 선 밖').
+        몸이나 바퀴 하나가 넘는 건 감점 아님 (다른 세션 검토 11-09)."""
+        if not walls or len(P) == 0:
+            return np.zeros(len(P), bool)
+        W_ = np.array(walls, float)
+        c, s_ = np.cos(P[:, 2]), np.sin(P[:, 2])
+        ins = []
+        for wx, wy in cls.WHEELS:
+            x = P[:, 0] + wx * c - wy * s_
+            y = P[:, 1] + wx * s_ + wy * c
+            ins.append(((x[:, None] > W_[None, :, 0]) & (x[:, None] < W_[None, :, 1])
+                        & (y[:, None] > W_[None, :, 2]) & (y[:, None] < W_[None, :, 3])).any(axis=1))
+        return (ins[0] & ins[1]) | (ins[2] & ins[3])
+
+    def m7_ack_ref(self, sc, lc, psi, lt, boxes, mg, wheel_walls=()):
+        """기준 S 자: 지금 자세에서 곧게 a 만큼 → 목표 쪽 원호 (반경 R) → 반대 원호로 방향 0 → 0.3 m 곧게, 끝 옆 = lt.
+        a 를 0 부터 0.05 씩 늘려 안 닿는 가장 이른 것 (다른 세션 설계 11-09: 끼는 이유는 결정보다 '꺾기 시작' 이 늦어서 —
+        지평선 0.95 m 비용만으로는 S 자 끝을 못 봐서 이른 시작을 안 고름). 지금 방향이 이미 목표 쪽이면 그대로 씀. 없으면 None."""
+        g = lambda k_: self.get_parameter(k_).value   # noqa: E731
+        R = g('ack_plan_radius_m')
+        for a in np.arange(0.0, g('m7_ack_ref_max_a_m') + 1e-9, 0.05):
+            l0 = lc + a * math.sin(psi)
+            dl = lt - l0
+            if abs(dl) < 0.02:
+                segs = [(0.0, a), (0.0, 0.3)] if abs(psi) < 0.05 else None
+                if segs is None:
+                    continue
+            else:
+                d = 1.0 if dl > 0 else -1.0
+                c = (math.cos(psi) + 1.0 - abs(dl) / R) / 2.0
+                if not -1.0 <= c <= 1.0:
+                    continue
+                th = d * math.acos(c)
+                l1 = R * abs(wrap(th - psi))
+                l2 = R * abs(th)
+                if d * (th - psi) < -1e-6:
+                    continue                # 이미 목표 쪽으로 더 틀어짐 — 첫 원호가 반대로 돌아야 함 (이 모양 아님)
+                segs = [(0.0, a), (d / R, l1), (-d / R, l2), (0.0, 0.3)]
+            P, D = self.ack_poses(sc, lc, psi, [sg for sg in segs if sg[1] > 1e-6])
+            if boxes and avoid.hits(P, boxes, mg).any():
+                continue
+            if wheel_walls and self.wheel_out(P, wheel_walls).any():
+                continue
+            return P, a
+        return None
+
+    def m7_ack_step(self, sc, lc, psi, lt, k, near, changing, funnel=(), outer=()):
         """아커만 M7 한 번: 곡률 후보 (κ1, κ2) 마다 첫 원호 d1 → 둘째 원호 d2 를 굴려 보고 (매 순간 다시 계획 — 조향 지연은
         ack_plan_radius_m 여유로), 첫 원호가 안 닿는 것 중 비용 (끝 옆 오차·방향 오차·둘째 원호에서 막히는 길이) 이 가장 작은 것.
         돌려줌: v, w (= v·κ1), 막힘 여부, 막힘 로그."""
@@ -1187,8 +1267,57 @@ class MissionManager(Node):
         K = np.linspace(-kmax, kmax, int(g('m7_ack_n')))
         d1, d2 = g('m7_ack_d1_m'), g('m7_ack_d2_m')
         boxes = avoid.escape((sc, lc, psi), list(near)) or []   # 이미 닿은 상자 (기억 오차) 는 빼고 — 빠져나가는 길도 고르게
-        mg = np.full(len(boxes), g('m7_margin_m'))
+        # 이미 여유 (m7_margin_m) 안에 붙은 상자는 여유 0 — 일률 여유면 그 자리에서 어느 원호도 첫 자세부터 닿아 못 빠져나감
+        # (2D 시뮬 11-09 e6: 목표 차로 옆 +0.43 까지 가서 모든 κ 빈 길이 0.00 → 후진 3 번 → 멈춤). 직선 검사 avoid.margins 와 같은 방식
+        mg = avoid.margins((sc, lc, psi), boxes, g('m7_margin_m')) if boxes else np.zeros(0)
         pmax = math.radians(g('m7_ack_max_psi_deg'))
+        ref = None
+        wheel_walls = []
+        # 바깥 노란 선은 늘 바퀴 규칙 — 몸이 조금 닿으면 escape 가 벽을 통째로 빼서 더 밖으로 나갈 수 있음
+        # (2D 시뮬 11-09 d9·d10: 오른쪽 차로로 S 자 하다 바깥선 규정 이탈 (7.2, 1.65))
+        outer_w = list(outer)
+        # 이미 바깥선을 어긴 채 시작 (두 바퀴 밖) 이면 그 검사는 '더 밖으로 안 감' 으로만 — 시작부터 막힘으로 보면 모든 κ 막힘 →
+        # 후진만 반복해 트랙 밖까지 밀려남 (2D 시뮬 11-09 c9, 다른 세션). 안쪽으로 들어오는 비용은 옆 오차가 줌
+        out_start = bool(outer_w) and bool(self.wheel_out(np.array([(sc, lc, psi)]), outer_w)[0])
+        out_walls = []
+        if changing and g('m7_ack_ref'):
+            m = self._m7
+            key = (k, round(sc / 0.1))
+            if m.get('ack_ref_key') != key:
+                m['ack_ref_key'] = key
+                fs = set(funnel)
+                b2 = [b for b in boxes if b not in fs]
+                latched = m.get('ack_all_until', -1.0) > sc and funnel
+                m['ack_ref'] = None if latched else self.m7_ack_ref(sc, lc, psi, lt, boxes, mg)
+                cross = False
+                if m['ack_ref'] is None and funnel and not latched:
+                    # ② 깔때기는 규정 (같은 쪽 두 바퀴가 선 밖) 으로만 — 몸·바퀴 하나는 넘어도 감점 아님
+                    m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, b2, np.full(len(b2), g('m7_margin_m')), wheel_walls=list(funnel))
+                    if m['ack_ref'] is not None:
+                        cross = 'wheel'
+                if m['ack_ref'] is None and funnel and (g('m7_ack_ref_cross_funnel') or latched):
+                    # 깔때기 노란 선을 지키면 S 자가 안 들어감 (트랙: 깔때기 끝 x 8.05 → 첫 줄 x 7.85 = 0.2 m, 아커만 S 자 0.84~0.9 m) →
+                    # 깔때기 벽만 빼고 (장애물·바깥 벽은 그대로) 다시. 선을 조금 넘을 수 있음 (차로 이탈 −1 위험 < 끼어서 M7 못 끝냄)
+                    m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, b2, np.full(len(b2), g('m7_margin_m')))
+                    cross = 'all' if m['ack_ref'] is not None else False
+                    if cross and not latched:
+                        # 한 번 ③ 으로 정하면 1 m (첫 줄을 지날 때까지) 유지 — 매 재계획 ①·② 가 될 듯 말 듯하면 선을 들락날락해
+                        # 차로 이탈이 여러 번 (규정: 1 회당 −1) 될 수 있음 (다른 세션 제안 11-09)
+                        m['ack_all_until'] = sc + g('m7_ack_all_latch_m')
+                r_ = m['ack_ref']
+                self.m7_mode(f'ref{k}{r_ is None}{cross}', f'기준 S 자 → 차로 {k}: ' + ('안 들어감 (반응형만)' if r_ is None else
+                                                  f'곧게 {r_[1]:.2f} m 뒤 꺾기 시작' + {'wheel': ' (깔때기는 바퀴 규칙으로)',
+                                                  'all': ' (깔때기 선 무시 — 차로 이탈 감점 위험)'}.get(cross, '')))
+                m['ack_ref_cross'] = cross
+            ref = m.get('ack_ref')
+            if ref is not None and m.get('ack_ref_cross') and funnel:
+                fs = set(funnel)              # 기준이 깔때기 몸 벽을 안 지키기로 했으면 후보 검사도 같게 (아니면 기준을 못 따라감)
+                boxes = [b for b in boxes if b not in fs]
+                mg = avoid.margins((sc, lc, psi), boxes, g('m7_margin_m')) if boxes else np.zeros(0)
+                if m.get('ack_ref_cross') == 'wheel':
+                    wheel_walls = list(funnel)
+                else:
+                    out_walls = list(funnel)  # ③: 두 바퀴 밖 구간이 짧은 쪽을 고르게 비용으로만
         best = None
         free1 = []
         for k1 in K:
@@ -1196,13 +1325,34 @@ class MissionManager(Node):
                 P, D = self.ack_poses(sc, lc, psi, [(k1, d1), (k2, d2)])
                 hit = avoid.hits(P, boxes, mg).any(axis=1) if boxes else np.zeros(len(P), bool)
                 bad = hit | (np.abs(P[:, 2]) > pmax)
+                if wheel_walls:
+                    bad = bad | self.wheel_out(P, wheel_walls)
+                if outer_w and not out_start:
+                    bad = bad | self.wheel_out(P, outer_w)
+                elif out_start:
+                    bad = bad | (np.abs(P[:, 1] - lt) > abs(lc - lt) + 0.02)   # 목표 차로에서 더 멀어지지 않게
                 fl = float(D[np.argmax(bad)] - D[0]) if bad.any() else float(D[-1])
                 if k2 == K[len(K) // 2]:
                     free1.append((k1, fl))
                 if fl < d1:
                     continue                    # 첫 원호에서 닿음 — 이 곡률로는 못 감
                 se, le, pe = P[-1] if not bad.any() else P[max(0, np.argmax(bad) - 1)]
-                cost = (g('m7_ack_w_lat') * abs(le - lt) + g('m7_ack_w_head') * abs(pe)
+                # 투영 옆 오차: 끝 자세에서 최소 반경으로 펴면 옆으로 R·(1 − cos ψ) 더 감 — 끝 방향 자체를 벌하면 S 자 가운데
+                # (방향이 클 수밖에 없음) 를 늘 손해로 봐서 '안 꺾는 쪽' 이 이김 (2D 시뮬 11-09 i1: +15° 로 들어와 왼쪽 차로로 가야 하는데
+                # 방향만 펴다 첫 줄 LIMO 에 비스듬히 끼임, 다른 세션 검토)
+                lp = le + math.copysign(g('ack_plan_radius_m') * (1.0 - math.cos(pe)), pe)
+                if ref is not None:
+                    # 기준 S 자 위 같은 s 의 옆·방향을 목표로 (기준이 '아직 안 꺾을 때' 와 '지금 꺾을 때' 를 정함)
+                    RP = ref[0]
+                    i_ = int(np.argmin(np.abs(RP[:, 0] - se)))
+                    lr, pr = (RP[i_, 1], RP[i_, 2]) if se <= RP[-1, 0] else (lt, 0.0)
+                    lpr = le + math.copysign(g('ack_plan_radius_m') * (1.0 - math.cos(pe - pr)), pe - pr)
+                    cost_lat = g('m7_ack_w_lat') * abs(lpr - lr) + g('m7_ack_w_ref_head') * abs(pe - pr)
+                else:
+                    cost_lat = g('m7_ack_w_lat') * abs(lp - lt)
+                if out_walls:
+                    cost_lat += g('m7_ack_w_out') * float(self.wheel_out(P, out_walls).mean()) * (d1 + d2)
+                cost = (cost_lat + g('m7_ack_w_head') * abs(pe)
                         + g('m7_ack_w_free') * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
                 if best is None or cost < best[0]:
                     best = (cost, k1, k2, fl)
@@ -1363,6 +1513,15 @@ class MissionManager(Node):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         m = self._m7
         count = m['retry'].add(self._pos)
+        if self.ack():
+            # 아커만은 후진·재시도마다 자세가 0.2 m 넘게 바뀌어 위치 반경으로는 늘 '새 자리' (c9: 1/3·2/3 만 41 번, 순 후진) →
+            # 진행 (가장 먼 s) 이 m7_ack_retry_progress_m 안 늘었으면 같은 자리로 셈
+            ms = m.get('max_s', 0.0)
+            if ms - m.get('retry_s', -9.0) < g('m7_ack_retry_progress_m'):
+                m['retry_n'] = m.get('retry_n', 0) + 1
+            else:
+                m['retry_n'], m['retry_s'] = 1, ms
+            count = m['retry_n']
         m['mon'].reset()
         m['blocked'] = None
         if count > g('m7_retry_max') and not m.get('opposite'):
@@ -1372,16 +1531,29 @@ class MissionManager(Node):
             k = self.m7_k(m['n'])
             opts = [j for j in ((2 * kh - k) if k != kh else None, kh - 1, kh + 1, kh)
                     if j is not None and 0 <= j < g('m7_lanes') and j != k]
+            # 앞이 많이 빈 차로 먼저 — 바로 앞이 막힌 차로를 고르면 거기서 또 막혀 멈춤 (2D 시뮬 11-09 x5_3: 0.3 m 앞이 막힌 차로 2 로 재시도, 다른 세션)
+            W_ = g('m7_lane_width_m')
+            half_ = W_ / 2 - g('m7_lane_margin_m')
+            sf_ = sc + CAR_HALF_L
+            bx_ = [self.m7_box(ob) for ob in self._obs]
+            def free_ahead(j):
+                lj = self.m7_lane_l(j)
+                d_ = [b[0] - sf_ for b in bx_ if b[3] > lj - half_ and b[2] < lj + half_ and b[1] > sc]
+                return min(min(d_) if d_ else 9.0, 9.0)
             side = self.m2_side()
+            far = None
             if side is not None and g('m7_avoid_far_side'):
                 far = g('m7_lanes') - 1 - (0 if side == 'A' else g('m7_lanes') - 1)
-                opts.sort(key=lambda j: j == far)        # 반대쪽 끝 차로는 마지막 후보로
+            opts.sort(key=lambda j: (j == far, free_ahead(j) < g('m7_block_m'), -round(free_ahead(j), 1)))   # 반대쪽 끝 차로는 마지막, 앞 막힌 차로는 뒤로
             if opts:
                 m['failed'] = (k, sc)            # 이 차로는 이 자리 근처에서 다시 고르지 않음
                 m['opposite'] = True
                 m['n'] = m['grid']['n_left'] - opts[0]
                 m['retry'].reset()
                 count = m['retry'].add(self._pos)
+                if self.ack():
+                    m['retry_n'], m['retry_s'] = 1, m.get('max_s', 0.0)
+                    count = 1
                 self.get_logger().warn(f'[M7] 같은 자리 재시도 {g("m7_retry_max")} 번 실패 ({reason}) → 반대쪽 차로 {opts[0]} '
                                        f'(가던 차로 {k}, 지금 위치 차로 {kh}) 로 다시 시도')
         if count > g('m7_retry_max'):
@@ -1422,6 +1594,8 @@ class MissionManager(Node):
             boxes = [b for b in boxes if inside(b)]
             near = [b for b in near if inside(b)]
         walls = []
+        outer = []                           # 3 차선 바깥 노란 선 (아커만: 몸 벽이 escape 로 빠져도 바퀴 규칙은 늘 지킴)
+        funnel = []                          # 입구 1차로·깔때기 가상 벽 (아커만 기준 S 자가 안 들어가면 이것만 빼고 다시 찾음)
         behind = []                          # 입구 벽 중 차 중심보다 완전히 뒤 조각 — 제자리 회전 검사에선 뺀다
         if g('m7_outer_wall'):
             # 세 차로 바깥 (노란 선 밖) 을 벽으로 — 쓸기 검사에서 노란 선 밖으로 나가는 방향을 막는다 (실차 11-06 full13: 노란 선 위로
@@ -1429,6 +1603,7 @@ class MissionManager(Node):
             hi = self.m7_lane_l(0) + W / 2 + g('m7_outer_wall_off_m')
             lo = self.m7_lane_l(g('m7_lanes') - 1) - W / 2 - g('m7_outer_wall_off_m')
             walls = [(sc - 2.0, sc + 2.0, hi, hi + 0.30), (sc - 2.0, sc + 2.0, lo - 0.30, lo)]
+            outer = list(walls)
             near = near + walls   # 앞뒤 대칭 (벽 안에 들어가 있어도 벽에서 멀어지는 쪽으로는 나감)
         if g('m7_entry_walls'):
             # 3차선 입구 흰 가로선까지는 1차로 (노란 선 둘이 나란함) — 그 양쪽에 가상 벽을 세워 대각으로 꺾지 못하게.
@@ -1459,6 +1634,7 @@ class MissionManager(Node):
                     k += 1
                 near = near + ew
                 walls = walls + ew
+                funnel = ew
                 # 차 중심보다 완전히 뒤에 있는 깔때기 조각은 제자리 회전 검사에서 뺀다 — 목표 차로 가운데까지 간 뒤 뒷모서리가
                 # 지나온 깔때기 벽에 걸려 어느 쪽으로도 못 돌고 후진 (2D 시뮬 11-09 q2·q3: s 1.07 에서 '회전 막힘' 전 방향)
                 behind = [b for b in ew if b[1] < sc]
@@ -1510,6 +1686,7 @@ class MissionManager(Node):
                 self.m7_mode('align', f'차로 방향 정렬 시작: 방향 오차 {math.degrees(psi):+.1f}°')
                 self.m7_publish(0.0, k_lim(-g('m7_k_heading') * psi - g('m7_kd_heading') * wz))
                 return
+        m['max_s'] = max(m.get('max_s', sc), sc)
         # 2) 후진 중 — 오도메트리로 m7_back_m, 뒤는 라이다 (+ 기억한 장애물) 로 확인
         if m['back'] is not None:
             bk = m['back']
@@ -1517,9 +1694,14 @@ class MissionManager(Node):
             rf = self.rear_free()
             mem = self.m7_free(sc, lc, psi, near, 0.06, -1.0)
             bm = bk.get('m', g('m7_back_m'))
-            why = ('끝' if moved >= bm else '시간 초과' if now - bk['t'] > g('m7_back_timeout_s') * bm / g('m7_back_m')
+            # 아커만: 뒤 라이다가 비었으면 뒤 기억 장애물 (뎁스 기억 — 지나온 상자가 크게 남음) 로는 후진을 안 멈춤. 아커만은 제자리 회전이
+            # 없어 후진이 유일한 회복인데, 0 cm 도 못 물러나고 같은 회복을 3 번 반복해 멈춤 (2D 시뮬 11-09 x5_4, 다른 세션)
+            mem_block = mem < 0.06 and not (self.ack() and rf is not None and rf >= g('m7_ack_back_lidar_free_m'))
+            back_lim = self.ack() and sc < m['max_s'] - g('m7_ack_back_limit_m')
+            why = ('끝' if moved >= bm else f'진행 기준 후진 한계 (가장 먼 s {m["max_s"]:.2f} − {g("m7_ack_back_limit_m")} m)' if back_lim
+                   else '시간 초과' if now - bk['t'] > g('m7_back_timeout_s') * bm / g('m7_back_m')
                    else f'뒤 라이다 {rf:.2f} m' if rf is not None and rf < g('m7_back_lidar_m')
-                   else '뒤 기억 장애물' if mem < 0.06 else None)
+                   else '뒤 기억 장애물' if mem_block else None)
             if why is None:
                 self.m7_mode('back', '후진 중')
                 w_b = 0.0
@@ -1646,7 +1828,7 @@ class MissionManager(Node):
         blk_msg = None
         if self.ack():
             # 4a) 아커만: 원호 두 개 (첫 원호 → 둘째 원호) 후보 중 안 닿고 목표 차로 가운데·차로 방향에 가장 가까워지는 것
-            v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing)
+            v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing, funnel, outer)
         else:
             # 4) 방향·속도: 바라는 방향 (pure pursuit) 에 가까운 후보 중 쓸기 검사로 m7_go_free_m 이상 갈 수 있는 것.
             #    없으면 제자리 회전 (v = 0) 으로 더 멀리 갈 수 있는 방향, 그것도 없으면 막힘
@@ -1730,7 +1912,10 @@ class MissionManager(Node):
         # 끝: 변경이 끝났고 내 차로 앞이 비었고, 다른 차로에도 가까운 장애물이 없을 때 (또는 안전장치 거리)
         clear = all(ahead(j) > g('m7_clear_m') for j in range(g('m7_lanes')))
         if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and abs(k - goal) == 1
-                and not m.get('final_shift') and not self._m2['locked'] and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
+                and not m.get('final_shift')
+                and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)
+                                                and self.dist_from(self._m2.get('lock_pos')) < g('m7_ack_final_after_lock_m')))
+                and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
             m['final_shift'] = True
@@ -1746,6 +1931,14 @@ class MissionManager(Node):
                                    f'구간 {sc:.2f} m{" (안전장치 거리)" if sc > g("m7_max_m") else ""} → 슬라이딩 윈도우 리셋')
             self._m7_done = True
             self.m2_commit(k)
+
+    def not_at_edge(self, goal):
+        """카메라로 '아직 목표 쪽 끝 차로가 아님' 확인: 최근 프레임 중 차선을 잡은 게 6 장 이상이고, 목표 쪽 노란 선만 보인
+        (= 이미 그 끝 차로) 프레임이 없을 때. odom 차로 격자는 한 차로 틀어질 수 있음 (2D 시뮬 11-09 d8: 실제 A 차로인데
+        '가운데' 로 봄 — 잠금 뒤 옮기면 바깥선 밖으로 꺾을 뻔, 다른 세션 확인). 확인 못 하면 안 옮김."""
+        edge = -1 if goal == 0 else 1
+        ok = [ys for f, ys in self._ys if f]
+        return len(ok) >= 6 and edge not in ok
 
     def m2_commit(self, k):
         """M7 이 끝난 차로 = 들어간 갈림길. 결과를 확정하고 다음 리셋까지 표지판을 더 보지 않는다."""
@@ -1959,7 +2152,57 @@ class MissionManager(Node):
         ex = self._m8['exit']
         herr = wrap(ex['dir'] - self._yaw)
         (ax_, ay_), _, lat = self.m8_axis_aim(ex['mid'], ex['dir'], g('m8_exit_look_m'))
-        t_lim = g('m8_exit_s') * (2.0 if self.ack() else 1.0)   # 아커만은 앞으로 가며 맞추므로 더 걸림
+        if self.ack():
+            # 아커만: 맞추는 동안 계속 앞으로 가서 신호등 쪽 코너 (차로 가운데 반경 ~0.5 m ≈ 최소 반경) 안에 들어가 넘겨주면
+            # 차선 추종이 못 돎 (2D 시뮬 11-09 e1: 2.6 s 맞추고 코너 안쪽 0.31 m 에서 넘겨줘 트랙 밖, e4: 바깥선 이탈 — 다른 세션 진단).
+            # 오도메트리도 아커만 회전의 옆 미끄럼을 몰라 출구선 위치가 어긋남 → 방향만 맞으면 (옆 무시) 바로 넘김, 길어야 m8_ack_exit_s
+            asst = ex.get('assist')
+            if asst is not None:
+                # 코너 보조 중: 시계 방향 트랙이라 M8 뒤는 늘 오른쪽 코너 — 최대 오른쪽으로 돌다가 차선 쌍이 잡히거나
+                # 통로 방향에서 m8_ack_assist_deg 돌았거나 시간이 다 되면 넘김 (IMU 방향만 — odom 위치는 미끄럼으로 어긋남)
+                turned = -wrap(self._yaw - ex['dir'])
+                ln = self._lane
+                pair = ln is not None and ln.found and ln.yellow_side == 2
+                if self._yaw0 is not None:
+                    # 끝 = 트랙 축 (출발 직선 = 주차 직선 방향) 에서 m8_ack_assist_axis_deg 안 — curvy 배치는 통로 방향이 차로와 ±20°
+                    # 어긋나 '통로 방향에서 80°' 는 20° 일찍·늦게 끝남 (다른 세션 검토)
+                    ax_err = wrap(self._yaw - wrap(self._yaw0 + self._yaw_drift))
+                    aligned = abs(ax_err) < math.radians(g('m8_ack_assist_axis_deg'))
+                    how = f'트랙 축과 {math.degrees(ax_err):+.0f}°'
+                else:
+                    aligned = turned >= math.radians(g('m8_ack_assist_deg'))
+                    how = f'통로 방향에서 {math.degrees(turned):.0f}° 돎'
+                if pair or aligned or now - asst['t'] > g('m8_ack_assist_s'):
+                    self.m8_finish(now, f'코너 보조 끝 ({"차선 쌍" if pair else "방향 맞음" if aligned else "시간"}, {how}, '
+                                        f'{now - asst["t"]:.1f} s)')
+                    return
+                v = g('m8_exit_speed')
+                self.m8_mode('assist', f'코너 보조: 차선이 안 잡혀 최대 오른쪽 (반경 {g("ack_min_radius_m"):.2f} m)')
+                self.m7_publish(v, -v / g('ack_min_radius_m'))
+                return
+            ln = self._lane
+            if ex.get('wait') is not None:
+                # 넘기기 전 m8_ack_assist_wait_s 동안 차선 쌍이 한 번이라도 잡히면 그냥 넘김 — 리셋 직후 첫 프레임은 정상 자리에서도
+                # 한쪽만 보이는 게 보통 (다른 세션: x5_0 첫 프레임 nl 1, 둘째부터 쌍). 끝까지 안 잡히면 코너 보조
+                if ln is not None and ln.found and ln.yellow_side == 2:
+                    self.m8_finish(now, f'통로 출구 방향 맞음 + 차선 쌍 잡힘 (아커만, {now - ex["t"]:.1f} s)')
+                    return
+                if now - ex['wait'] >= g('m8_ack_assist_wait_s'):
+                    ex['assist'] = {'t': now}
+                    self.get_logger().info(f'[M8] 출구에서 {g("m8_ack_assist_wait_s"):.1f} s 동안 차선 쌍이 안 잡힘 '
+                                           f'({"차선 없음" if ln is None or not ln.found else f"한쪽 ({ln.yellow_side:+d})"}) → 코너 보조')
+                    return
+                v = g('m8_exit_speed') * 0.5     # 기다리는 동안 출구 방향 그대로 천천히
+                self.m7_publish(v, 0.0)
+                return
+            if abs(herr) < math.radians(g('m8_ack_exit_deg')) or now - ex['t'] > g('m8_ack_exit_s'):
+                if g('m8_ack_corner_assist') and not (ln is not None and ln.found and ln.yellow_side == 2):
+                    ex['wait'] = now
+                    return
+                self.m8_finish(now, f'통로 출구 방향 맞음 (아커만 — 옆 무시, 방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm, '
+                                    f'{now - ex["t"]:.1f} s)')
+                return
+        t_lim = g('m8_exit_s')
         if (abs(herr) < math.radians(g('m8_exit_deg')) and abs(lat) < g('m8_exit_lat_m')) or now - ex['t'] > t_lim:
             self.m8_finish(now, f'통로 출구선에 맞춤 (방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm, {now - ex["t"]:.1f} s)')
             return
@@ -2071,6 +2314,11 @@ class MissionManager(Node):
             pb = 0.0
         if aim is not None:
             mx, my = aim
+            if self.ack() and g('m8_ack_outer_bias_m') > 0 and len(m['seen']) >= g('m8_ack_outer_bias_after'):
+                # 마지막 문 몇 개는 문 안에서 바깥쪽 (왼쪽 — 시계 방향 트랙이라 M8 뒤 코너는 늘 오른쪽) 으로 치우쳐 지남. curvy 배치는
+                # 마지막 문이 코너 안쪽으로 끝나 문 가운데를 따라가면 어떤 아커만 경로로도 코너 안쪽 선을 밟음 (2D 시뮬 11-09 b6,
+                # 다른 세션 분석). 문 폭 여유 ±0.085 m 안 — 콘 쓸기 검사는 그대로
+                my += g('m8_ack_outer_bias_m')
         elif cands:
             _, mx, my, gap = min(cands, key=lambda q: abs(wrap(q[0] - pb)) + 0.3 * q[1])
         if aim is not None or cands:
