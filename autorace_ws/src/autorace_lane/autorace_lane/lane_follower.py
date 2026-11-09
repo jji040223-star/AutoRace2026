@@ -118,6 +118,11 @@ class LaneFollower(Node):
         # 20 s (4 m) 직진해 트랙 밖
         p('lost_hold_mode', 'decay')       # decay = 원본 (직전 조향이 3 s 시정수로 직진 쪽으로) | hold = 직전 조향 그대로 유지 (코너 계속 돎)
         p('lost_stop_m', 0.0)              # 차선을 잃은 뒤 이 거리 [m] (명령 속도 적분) 를 가면 정지. 0 = 끔 (lost_stop_s 만)
+        p('drive_mode', 'diff')            # drive.launch 가 넘김. ackermann 일 때만 아래 코너 속도 상한을 씀
+        p('ack_corner_speed', 0.0)         # 아커만: |curvature| ≥ ack_corner_curv 이면 속도 상한 [m/s]. 0 = 끔.
+                                           # w ∝ v 라 곡률은 그대로 — 빠를수록 덜 도는 차 (understeer) 의 실제 반경만 줄임
+                                           # (2D 시뮬 11-10 c2 real2: 오른쪽 실효 반경 0.75 > 코너 0.6 → 이탈. 실차 측정 7 보고 정함)
+        p('ack_corner_curv', 0.3)          #   코너로 보는 |curvature| (가까운 → 먼 밴드 흐름, 정규화)
         p('image_timeout_s', 0.5)          # 영상이 이만큼 안 오면 정지
         p('lane_cmd_topic', '/mission/lane_cmd')
         p('state_topic', '/lane/state')
@@ -259,6 +264,9 @@ class LaneFollower(Node):
             hold = max(-0.30, min(0.30, u))   # 원본: 소실 폴백 EMA 는 과도 스파이크 완화를 위해 ±0.30 클램프
             self._steer_hold = hold if self._steer_hold is None else 0.3 * hold + 0.7 * self._steer_hold
             cmd.linear.x = float(max(g('slow_speed'), g('linear_speed') * (1.0 - g('curve_slow') * abs(r.curvature))))
+            if (g('drive_mode') == 'ackermann' and g('ack_corner_speed') > 0.0
+                    and abs(r.curvature) >= g('ack_corner_curv')):
+                cmd.linear.x = min(cmd.linear.x, float(g('ack_corner_speed')))
         elif (self._steer_hold is not None and self._last_found is not None and not lost_far
               and (g('lost_stop_s') <= 0 or now - self._last_found < g('lost_stop_s'))):
             if g('lost_hold_mode') != 'hold':
