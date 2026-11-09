@@ -1,0 +1,4 @@
+sim2d:
+  ros__parameters:
+    drive_mode: ackermann
+    ack_min_radius: 0.80

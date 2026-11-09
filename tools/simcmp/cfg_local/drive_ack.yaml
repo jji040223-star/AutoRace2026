@@ -1,0 +1,6 @@
+mission_manager:
+  ros__parameters:
+    drive_mode: ackermann
+parking_controller:
+  ros__parameters:
+    drive_mode: ackermann

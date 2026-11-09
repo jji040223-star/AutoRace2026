@@ -1,0 +1,9 @@
+mission_manager:
+  ros__parameters:
+    drive_mode: ackermann
+    ack_min_radius_m: 0.80
+    ack_plan_radius_m: 0.85
+parking_controller:
+  ros__parameters:
+    drive_mode: ackermann
+    ack_min_radius_m: 0.80
