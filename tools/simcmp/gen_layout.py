@@ -12,6 +12,9 @@ r = random.Random()
 
 
 MAX_PER_LANE = 3     # 한 차로 (0·1·2) 에 놓는 LIMO 최대 수
+FIRST_X = (7.55, 7.85)   # 첫 줄 x: 30 % 는 7.85 (깔때기 끝 바로 뒤 — 아커만이 감점 없이 못 지나는 가장 가혹한 자리), 나머지 이 사이 랜덤.
+                         # 7.55 보다 뒤면 4 줄 (줄 사이 0.75~1.0) 이 갈림길 입구 x 5.15 전에 안 들어감
+FIRST_HARD = 0.3
 LAST_X = 5.15        # 마지막 줄은 이보다 앞 (기본 배치와 같음) — 분리대 (x 4.28) 앞 갈림길 A·B 입구를 막지 않게
 
 
@@ -35,9 +38,10 @@ def make():
         reach = nxt
         path_sets.append(sorted(nxt))
     gaps = [r.uniform(0.90, 1.00) if need_change[k] else r.uniform(0.75, 1.00) for k in range(1, len(rows))]
-    if 7.85 - sum(gaps) < LAST_X:
+    x0 = FIRST_X[1] if r.random() < FIRST_HARD else round(r.uniform(*FIRST_X), 2)
+    if x0 - sum(gaps) < LAST_X:
         return None          # 줄 사이를 다 넣으면 마지막 줄이 갈림길 입구까지 감
-    x, out = 7.85, []
+    x, out = x0, []
     for k, occ in enumerate(rows):
         if k > 0:
             x -= gaps[k - 1]
