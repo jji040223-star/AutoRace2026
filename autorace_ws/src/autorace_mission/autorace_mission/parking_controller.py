@@ -434,6 +434,18 @@ class ParkingController(Node):
             self.set_state('FAIL', f'막힘 {why} — 재시도 {self.retry - 1} 번 넘음, 멈춤')
             self.get_logger().error('[M4] 주차 실패 — 멈춤')
             return True
+        if self.state == 'LANE_FIX':
+            # 차로로 나와 방향 맞추는 중 막힘 — 비스듬한 채 ALIGN 으로 가면 안 됨 (다른 세션 검토) → 그대로 끝, 차선 추종이 이어받음
+            self.pub(0.0, 0.0)
+            self.result += f', 차로 맞추다 막힘 ({why}) — 그대로 끝, 전체 {now - self.t0:.1f} s'
+            self.set_state('DONE', self.result)
+            self.result_pub.publish(String(data=self.result))
+            self.done_pub.publish(Empty())
+            return True
+        if self.state == 'ARC_FWD':
+            self.pub(0.0, 0.0)
+            self.set_state('ARC_OUT', f'짧게 전진 중 막힘: {why} → 다시 후진 원호 ({self.retry} 번째)')
+            return True
         if self.state == 'ARC_IN':
             # 아커만 원호 중 막힘: 돈 채로 ALIGN 으로 가면 h0 축 거리만 보고 비스듬히 옆 LIMO 쪽으로 감 (다른 세션 검토 11-09) →
             # 원호를 되감아 (후진 원호) 차로로 나온 뒤 정렬부터

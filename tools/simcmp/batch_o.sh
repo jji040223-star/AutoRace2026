@@ -21,8 +21,8 @@ for k in 8 9 10; do
   MP=$PWD/practice_m7.yaml ./run.sh $n $((70+k)) $C,$PWD/cfg/$n.yaml,$ST$A $C$A & PIDS="$PIDS $!"
   sleep 2
 done
-# 하나 (k=8) 는 보기 창으로 보여줌
-( sleep 5; source /opt/ros/jazzy/setup.bash; source ~/AutoRace2026/autorace_ws/install/setup.bash
+# 하나 (k=8) 는 보기 창으로 보여줌 (NOVIEW=1 이면 안 띄움)
+[ -z "$NOVIEW" ] && ( sleep 5; source /opt/ros/jazzy/setup.bash; source ~/AutoRace2026/autorace_ws/install/setup.bash
   ROS_DOMAIN_ID=78 FASTRTPS_DEFAULT_PROFILES_FILE=$PWD/fastdds_shm.xml DISPLAY=${DISPLAY:-:1} python3 view.py ) &
 wait $PIDS
 echo ALL_DONE
