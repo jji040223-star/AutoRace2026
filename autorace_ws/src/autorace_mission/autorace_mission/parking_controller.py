@@ -119,6 +119,7 @@ class ParkingController(Node):
                                            # 원호 중 r = Δu/(1−sinθ) 로 다시 계산할 때 조일 여유 — 0.03 (0.50) 이면 실제가 조금만 덜 돌아도
                                            # 못 되돌림 (다른 세션 검토 11-09). 실차 최소 반경은 재서 ack_min_radius_m 에
         p('ack_arc_speed', 0.08)
+        p('ack_min_speed', 0.05)           # 아커만 저속 명령 하한 (정지마찰 위로)
         p('ack_arc_end_deg', 2.0)          # 90° 에서 이만큼 안이면 원호 끝
         p('exit_speed', 0.09)
         p('stuck_s', 1.0)
@@ -725,6 +726,11 @@ class ParkingController(Node):
     def ack(self):
         return self.get_parameter('drive_mode').value == 'ackermann'
 
+    def min_v(self, v):
+        """아커만이면 최소 속도를 ack_min_speed 이상으로 — 저속 정지마찰 (데드밴드) 아래 명령은 안 움직여 막힘 감시가 재시도
+        (다른 세션: 실차 가정 v_deadband 0.04 면 ENTER 0.03·FIX 0.02 가 안 움직임)."""
+        return max(v, self.get_parameter('ack_min_speed').value) if self.ack() else v
+
     def park_r(self):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         return g('ack_min_radius_m') + g('ack_park_margin_m')
@@ -858,7 +864,7 @@ class ParkingController(Node):
         herr = wrap(self.bay['axis'] - self.heading())
         w = g('enter_k_lat') * e + g('enter_k_head') * herr
         w = max(-g('enter_max_w'), min(g('enter_max_w'), w))
-        v = max(g('enter_min_speed'), min(g('enter_speed'), g('enter_kp') * remain))
+        v = max(self.min_v(g('enter_min_speed')), min(g('enter_speed'), g('enter_kp') * remain))
         # 쓸기 검사 (M7 과 같은 함수): 앞으로 remain 만큼 가며 네 모서리가 라이다 점에 닿지 않는지
         pt = self.pts()
         if pt is not None:
@@ -903,8 +909,9 @@ class ParkingController(Node):
             self.enter_len = math.dist(self.enter_from, self.pose[:2])
             self.set_state('CHECK', '앞뒤 보정 끝')
             return
-        v = max(-0.05, min(0.05, 1.0 * err))
-        v = math.copysign(max(0.02, abs(v)), v)
+        vm = max(0.05, self.min_v(0.0) + 0.01)
+        v = max(-vm, min(vm, 1.0 * err))
+        v = math.copysign(max(self.min_v(0.02), abs(v)), v)
         if self.stuck(now, abs(v), 0.0):
             return
         self.pub(v, 0.0)

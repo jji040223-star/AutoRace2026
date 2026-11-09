@@ -192,6 +192,7 @@ class MissionManager(Node):
         # 구동 방식: diff (네 바퀴 차동 — 제자리 회전) | ackermann (앞바퀴 조향 — 제자리 회전 없음, 최소 회전 반경)
         p('drive_mode', 'diff')
         p('ack_min_radius_m', 0.47)        # 아커만 최소 회전 반경 (차 중심) — limo_base 가 이보다 작은 반경은 잘라냄
+        p('ack_min_speed', 0.05)           # 아커만 저속 명령 하한 — 정지마찰 (데드밴드) 아래면 안 움직여 막힘 (실차 가정, 다른 세션)
         p('ack_plan_radius_m', 0.52)       # 경로 계획에 쓰는 최소 반경 (조향 지연·오차 여유)
         p('m7_ack_d1_m', 0.25)             # 아커만 M7: 첫 원호 길이 (매 순간 다시 계획 — 이 원호의 곡률로 운전)
         p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
@@ -1384,7 +1385,7 @@ class MissionManager(Node):
         _, k1, k2, fl = best
         vmax = g('m7_change_speed') if (changing or abs(k1) > 0.3 * kmax) else g('m7_speed')
         v = min(vmax, g('m7_kv') * (fl - g('m7_stop_gap_m')))
-        v = max(v, 0.04) if fl >= d1 else 0.0
+        v = max(v, g('ack_min_speed')) if fl >= d1 else 0.0
         kind = 'straight' if abs(k1) < 0.15 * kmax else 'arc'
         self.m7_mode(f'{kind}{k}', f'{"직진" if kind == "straight" else "원호"} κ {k1:+.2f} → {k2:+.2f} (반경 '
                                    f'{"∞" if abs(k1) < 1e-6 else f"{1 / abs(k1):.2f}"} m, 빈 길이 {fl:.2f} m, 차로 {k})')
