@@ -1249,7 +1249,9 @@ class MissionManager(Node):
         K = np.linspace(-kmax, kmax, int(g('m7_ack_n')))
         d1, d2 = g('m7_ack_d1_m'), g('m7_ack_d2_m')
         boxes = avoid.escape((sc, lc, psi), list(near)) or []   # 이미 닿은 상자 (기억 오차) 는 빼고 — 빠져나가는 길도 고르게
-        mg = np.full(len(boxes), g('m7_margin_m'))
+        # 이미 여유 (m7_margin_m) 안에 붙은 상자는 여유 0 — 일률 여유면 그 자리에서 어느 원호도 첫 자세부터 닿아 못 빠져나감
+        # (2D 시뮬 11-09 e6: 목표 차로 옆 +0.43 까지 가서 모든 κ 빈 길이 0.00 → 후진 3 번 → 멈춤). 직선 검사 avoid.margins 와 같은 방식
+        mg = avoid.margins((sc, lc, psi), boxes, g('m7_margin_m')) if boxes else np.zeros(0)
         pmax = math.radians(g('m7_ack_max_psi_deg'))
         ref = None
         wheel_walls = []
@@ -1287,7 +1289,7 @@ class MissionManager(Node):
             if ref is not None and m.get('ack_ref_cross') and funnel:
                 fs = set(funnel)              # 기준이 깔때기 몸 벽을 안 지키기로 했으면 후보 검사도 같게 (아니면 기준을 못 따라감)
                 boxes = [b for b in boxes if b not in fs]
-                mg = np.full(len(boxes), g('m7_margin_m'))
+                mg = avoid.margins((sc, lc, psi), boxes, g('m7_margin_m')) if boxes else np.zeros(0)
                 if m.get('ack_ref_cross') == 'wheel':
                     wheel_walls = list(funnel)
                 else:
