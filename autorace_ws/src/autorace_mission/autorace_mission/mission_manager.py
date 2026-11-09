@@ -2329,8 +2329,10 @@ class MissionManager(Node):
                     kap_loc = 2.0 * cr / den if den > 1e-6 else 0.0      # + = 왼쪽으로 휨
                     if abs(kap_loc) >= g('m8_ack_bias_min_kappa'):
                         my -= math.copysign(bias, kap_loc)              # 휨의 바깥쪽
-                elif len(m['seen']) >= g('m8_ack_outer_bias_after'):
-                    my += bias                                           # 끝: 다음 오른쪽 코너의 바깥 (왼쪽)
+                        m['last_kap'] = kap_loc
+                elif m.get('last_kap') is not None:
+                    # 끝 (문 3 개 안 보임): 마지막으로 잰 휨 방향 유지 — 고정 왼쪽이면 curvy 끝 (오른쪽 굽이) 의 안쪽 왼쪽 콘 12 가 넘어짐 (다른 세션)
+                    my -= math.copysign(bias, m['last_kap'])
         elif cands:
             _, mx, my, gap = min(cands, key=lambda q: abs(wrap(q[0] - pb)) + 0.3 * q[1])
         if aim is not None or cands:
