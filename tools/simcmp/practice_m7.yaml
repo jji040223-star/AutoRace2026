@@ -1,0 +1,6 @@
+# 횡단보도 앞에서 출발하는 시험: 건너뛰는 미션 없음 (M3 횡단보도·M7·M8·M1 신호등·M4 주차 다 함). 3차선 속도 0.2 (실차 연습과 같게)
+mission_manager:
+  ros__parameters:
+    skip_missions: [""]               # 빈 목록은 ROS 가 못 읽어서 빈 문자열 하나 (= 건너뛰는 미션 없음, 코드 기본값과 같음)
+    m7_speed: 0.2
+    m7_axis0_from_start: true          # 시뮬 출발 자세는 트랙과 나란함

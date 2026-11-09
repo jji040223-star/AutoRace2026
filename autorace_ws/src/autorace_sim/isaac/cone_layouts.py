@@ -11,6 +11,10 @@
   wide     : 라바콘 간격이 조금 넓음 (pitch 0.33 m). 끝 쌍은 다른 배치와 같은 자리 (왼쪽 직선 안 — 그대로 늘리면 끝 콘이 커브 입구까지 감)
   jitter   : default 에 콘마다 ±3 cm 흔들기 (리셋마다 새로)
   random   : 리셋마다 위 중 하나
+  curvy_m  : (random 에 안 들어감) curvy 를 좌우로 뒤집은 것 (처음에 오른쪽으로 휨)
+  curvy    : (random 에 안 들어감) 통로 폭은 default 와 같고 (half_gap 0.25) 더 크게 휨 (sway 0.20, 주기 1.5 m) — 곧게 가면 콘에 닿음
+  tight    : (random 에 안 들어감) 쌍 간격 좁고 (half_gap 0.20) 크게 휨 (sway 0.18) — 곧게 가면 안쪽 콘에 닿음.
+             가운데선을 따라가면 차 옆 (0.11) + 바닥판 (0.055) 뒤 여유 3.5 cm
 """
 import math
 import random
@@ -30,6 +34,12 @@ def positions(name, base, rng=None):
         b["sway"], bend = 0.0, 0.15
     elif name == "s":
         b["sway"] = 0.16
+    elif name == "curvy":
+        b["sway"], b["sway_period"] = 0.20, 1.5
+    elif name == "curvy_m":
+        b["sway"], b["sway_period"] = -0.20, 1.5
+    elif name == "tight":
+        b["sway"], hg0, hg1 = 0.18, 0.20, 0.20
     elif name == "narrow":
         b["sway"], hg0, hg1 = 0.0, 0.27, 0.21
     elif name == "wide":

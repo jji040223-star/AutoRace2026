@@ -1,0 +1,4 @@
+mission_manager:
+  ros__parameters:
+    skip_missions: ["M8", "M1"]
+    m7_speed: 0.2

@@ -148,13 +148,25 @@ class MissionManager(Node):
         p('m3_max_box_px', 200)            # 이보다 큰 박스는 보행자 표지판 아님 (라바콘 구간에서 화면 가득 오검출 480 px)
         # M7 3차선 정적 장애물 회피
         p('m7_trigger_m', 1.2)             # 내 차로 앞 이 거리 안 장애물이면 켜짐 (뎁스 화각 ±35° — 옆 차로 장애물을 놓치지 않게 일찍)
+        p('m7_trigger_overlap', True)      # 내 차로 판단: 장애물이 ±m7_trigger_half_m 에 걸치면 (false = 가운데가 그 안일 때만)
         p('m7_trigger_half_m', 0.2)        # 내 차로 = 차 중심 옆 ±이만큼
         p('m7_min_width_m', 0.12)          # 정차 LIMO 폭 0.22. 라바콘(~0.09)·표지판 기둥으로는 안 켜지게
         p('m7_max_width_m', 0.45)          # 이보다 넓은 뎁스 장애물은 버림 — 방지턱에서 차가 기울면 바닥이 폭 2 m 장애물로 보였다 (11-02)
         p('m7_min_height_m', 0.10)         # 정차 LIMO 높이 0.25. 방지턱을 넘으며 차가 기울 때 바닥이 장애물로 보이는 것 (시뮬에서 겪음) 거르기
+        p('m7_max_height_m', 0.45)         # 이보다 높은 뎁스 장애물은 버림 (기억·켜짐 둘 다) — 정지선 뒤 코너에서 트랙 밖 유리벽 (뎁스 상한 0.6) 을
+                                           # 정차 LIMO 로 기억해 차로 격자가 한 칸 밀림 → 빈 오른쪽 차로를 없는 차로로 봄 (실차 11-06 full_m1m7)
         p('m7_confirm_frames', 3)
         p('m7_lane_width_m', 0.52)         # 차로 중심 간격 (선 안쪽 500 + 선 20 mm)
         p('m7_lanes', 3)
+        p('m7_entry_lane', 1)              # M7 에 들어갈 때 차로 (0 = 맨 왼쪽). 입구는 한 차로가 가운데 차로로 이어지는 구조 → 차 위치로
+                                           # 격자를 바로 고정. −1 = 예전처럼 정차 LIMO 위치로 추측 (실차 11-06: 트랙 밖 유리벽을 LIMO 로 세어
+                                           # 격자가 한 칸 밀림 → 빈 오른쪽 차로를 없는 차로로 봄, 3 번 중 2 번)
+        p('m7_entry_center_fix', False)    # 진입 직전 1차로 차선 가운데 (lane_follower) 로 격자 가운데 맞춤
+        p('m7_entry_center_back_m', 1.2)   #   진입점 뒤 이 거리 안에서 잰 점만
+        p('m7_entry_center_max_m', 0.15)   #   이보다 크게 벗어났다고 나오면 안 씀 (차선 오인식)
+        p('m7_outer_wall', True)           # 세 차로 바깥을 쓸기 검사 벽으로 (노란 선 밖으로 안 나가게)
+        p('m7_outer_wall_off_m', 0.0)      #   벽 위치 = 바깥 차로 끝선 + 이만큼 (+ 바깥)
+        p('m7_drop_outside', True)         # 세 차로 밖에 중심이 있는 장애물 (기억·라이다) 은 무시 — 트랙 밖 벽·물건
         p('m7_lane_margin_m', 0.05)        # 장애물이 차로에 걸친다고 볼 최소 겹침
         p('m7_obstacle_len_m', 0.33)
         p('m7_obstacle_width_m', 0.22)     # 옆에 있는 장애물은 차에서 먼 옆면이 덜 보여 폭이 좁게·중심이 차 쪽으로 잡힌다 (시뮬 rosbag 4 판:
@@ -180,6 +192,10 @@ class MissionManager(Node):
         p('m7_avoid_far_side', True)      # M2: 표지판 반대쪽 끝 차로 (A 면 2, B 면 0) 는 다른 후보가 없을 때만
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
         p('m7_failed_keep_m', 0.6)        # 같은 자리 실패 뒤 반대쪽 재시도: 실패한 곳 + 이 거리까지 그 차로를 다시 고르지 않음
+        p('m7_lidar_trim', True)           # 라이다 가까운 기억 상자는 차를 향한 면을 라이다 점까지 줄임 (실차 11-06)
+        p('m7_lidar_trim_reach_m', 1.2)    #   라이다에서 상자 가까운 면까지 이 안
+        p('m7_lidar_trim_pad_m', 0.03)     #   라이다 점 바깥 여유
+        p('m7_lidar_trim_min_m', 0.10)     #   줄여도 이 두께는 남김
         p('m7_lidar_clear', True)         # 뎁스로 기억한 상자 자리를 라이다 빔이 뚫고 지나가면 (가짜) 지움
         p('m7_lidar_clear_scans', 4)       #   이만큼 연속 (라이다 8~10 Hz → 약 0.5 s)
         p('m7_lidar_clear_reach_m', 1.2)   #   라이다에서 상자 가까운 면까지 이 안일 때만
@@ -192,6 +208,8 @@ class MissionManager(Node):
         p('m7_rot_margin_m', 0.015)        # 제자리 회전 검사 여유
         p('m7_check_m', 1.0)               # 쓸기 검사 길이
         p('m7_go_free_m', 0.15)            # 이 거리 이상 갈 수 있는 방향만 '갈 수 있음'
+        p('m7_skip_overlap_m', 0.15)       # 장애물이 옆 차로를 이만큼 이하로 걸치면 차로를 고를 때 그 차로를 막은 것으로 안 침 (실차 11-06)
+        p('m7_reach_slack_m', 0.08)        # 차로 변경 대각은 목표 차로 가운데 − 이만큼까지 비어 있어야 꺾음 (실차 11-06)
         p('m7_heading_step_deg', 10.0)     # 차로 바꿀 때 방향 후보 간격 (0 ~ m7_max_heading_deg, 목표 차로 쪽)
         p('m7_lookahead_m', 0.30)
         p('m7_k_heading', 1.8)             # ω = k × 방향 오차 − kd × 지금 회전 속도 (3.0 이면 시뮬에서 ±30° 로 흔들렸다)
@@ -210,7 +228,9 @@ class MissionManager(Node):
         p('m7_blocked_s', 1.0)             # 갈 방향이 없으면 이 시간 뒤 차로 다시 고르기, 두 배 뒤 후진
         p('m7_back_m', 0.15)               # 후진 거리 (오도메트리)
         p('m7_back_speed', 0.06)
-        p('m7_back_timeout_s', 4.0)
+        p('m7_back_timeout_s', 4.0)        # m7_back_m 한 번 기준 (더 많이 물러날 때는 비례해서 늘림)
+        p('m7_back_grow', True)            # 같은 자리 n 번째 막힘이면 m7_back_m × n 만큼 물러남
+        p('m7_back_grow_max', 3)
         p('m7_back_lidar_m', 0.05)         # 라이다로 본 뒤쪽 빈 거리가 이보다 짧으면 후진 멈춤
         p('m7_retry_radius_m', 0.20)       # 이 안에서 다시 막히면 '같은 자리' 재시도로 셈
         p('m7_retry_max', 3)               # 같은 자리 재시도 상한 — 넘으면 멈추고 에러 로그
@@ -220,6 +240,7 @@ class MissionManager(Node):
         p('m7_axis_snap_deg', 90.0)        # 차로 방향을 이 단위로 맞춤 (0 = 안 맞춤)
         p('m7_axis0_frames', 30)           # 출발 직선에서 트랙 축을 잴 프레임 수 (0 = 안 잼, odom 0° 를 트랙 축으로)
         p('m7_axis_need_yaw0', True)
+        p('m7_axis0_from_start', False)    # 시뮬 전용: 출발 방향 = 트랙 축 (출발 자세가 트랙과 나란할 때만). 실차는 false (출발 직선에서 잼)
         p('yaw_drift_fix', True)            # 직선에서 차선 방향으로 IMU 방향 흐름을 재서 차로 방향에 반영
         p('yaw_drift_gain', 0.05)           #   장마다 이만큼 따라감 (13 장/초 → 약 1.5 s)
         p('yaw_drift_gate_deg', 20.0)       #   지금 추정과 이보다 다르면 버림 (코너·오인식)
@@ -233,7 +254,29 @@ class MissionManager(Node):
         p('m7_line_fix_frames', 8)         # 이만큼 모이면 그 중앙값 × m7_line_fix_gain 만큼 격자를 옮김
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
-        p('m7_line_fix_max_m', 0.15)       # 보정 합 상한
+        p('m7_line_relocate', True)        # 끝 차로가 아니라고 믿는데 노란 바깥선 하나만 보이면 그 끝 차로로 격자를 다시 맞춤 (실차 11-06)
+        p('m7_line_relocate_frames', 8)    #   이만큼 연속으로 모인 값의 중앙값만큼
+        p('m7_line_relocate_spread_m', 0.08)  # 모인 값의 폭이 이보다 크면 안 씀
+        p('m7_line_relocate_max_m', 0.60)  #   이보다 크게 옮겨야 하면 안 씀 (한 차로 0.52 + 여유 — 두 차로 건너뛰기 막음. 2D 시뮬 11-08 a7: +53.5 cm 로 반대쪽 끝)
+        p('m7_line_relocate_heading_deg', 8.0)  # 차 방향·잡은 선 방향 모두 차로 방향과 이 안일 때만 (비스듬하면 노란 선 좌우를 잘못 봄)
+        p('m7_line_relocate_max_s', 3.5)   #   구간 시작에서 이 안에서만 (끝의 A/B 분리대 노란 선과 헷갈리지 않게)
+        p('m7_line_fix_max_m', 0.15)       # 보정 합 상한 (작은 보정만 — '위치 다시 맞춤' 은 따로, 이 상한에 안 묶임)
+        # 후진 뒤 라이다 탐색 직진: 기억 (뎁스) 대신 지금 라이다로 가장 빈 방향을 골라 조금 가 본다 (사용자 11-08 — 실차 11-06: 막힌 주행마다
+        # '옆 차로가 비어 있지 않음 → 유지' 후 같은 방향 후진·전진 반복)
+        p('m7_entry_fix', True)            # 3차선 입구 앞 1차로 (곧고 두 노란 선 평행) 에서 잰 가운데로 격자 맞춤
+        p('m7_entry_fix_curv', 0.05)       #   곡률 이보다 작은 장면만
+        p('m7_entry_fix_parallel_px', 20.0)  # 두 선 간격 (BEV 아래·위) 차이가 이 안인 장면만 (깔때기 제외)
+        p('m7_entry_fix_back_m', 2.0)      #   M7 켜진 자리 뒤 이 안 점만
+        p('m7_entry_fix_max_m', 0.60)      #   옆 이보다 먼 점은 버림
+        p('m7_entry_fix_min_pts', 5)
+        p('m7_entry_stopline', True)       # 3차선 입구 흰 가로선이 보일 때 잰 1차로 가운데로 격자 맞춤
+        p('m7_entry_stopline_max_m', 0.40) # 이보다 먼 점은 버림 (다른 선)
+        p('m7_probe', True)
+        p('m7_probe_deg', 35.0)            # 차로 방향 ± 이 안에서
+        p('m7_probe_step_deg', 5.0)
+        p('m7_probe_m', 0.40)              # 이만큼 가 보고 원래 로직으로
+        p('m7_probe_min_m', 0.30)          # 가장 빈 방향도 이보다 짧으면 안 함
+        p('m7_probe_timeout_s', 6.0)
         # M8 라바콘 (Follow-the-Gap)
         p('cones_topic', '/perception/cones')
         p('m8_require_m2', True)           # 순서 힌트: M2 를 지난 뒤에만 (시험: 라바콘 앞에서 출발하면 false)
@@ -268,6 +311,8 @@ class MissionManager(Node):
         p('m8_exit_look_m', 0.3)
         p('m8_exit_s', 3.0)                # 맞추기 최대 시간
         p('m8_exit_speed', 0.15)
+        p('m8_exit_lane', True)            # 끝 맞춤 선 = 차로 가운데선 (첫 쌍 가운데, 라바콘 구간 시작 때 차로 방향). false = 통로 출구선
+        #                                    (2D 시뮬 11-08: 통로가 차로 옆으로 휘어 끝나면 출구선이 노란 선 위 → 코너에서 차선을 놓쳐 트랙 밖으로)
         # M1 신호등
         p('light_topic', '/perception/traffic_light')
         p('parking_start_topic', '/parking/start')
@@ -337,6 +382,9 @@ class MissionManager(Node):
         self._m2z = {'single': 0, 'side_obs': 0, 'zone': None, 'shift': None, 'hold': None, 'both': 0,
                      'dirs': collections.deque(maxlen=60), 'seen_at': None}   # M7 없이 M2 (m2_without_m7)
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
+        self._entry_ctr = collections.deque(maxlen=60)   # 위 점 중 곧고 두 선이 평행한 장면만 (3차선 입구 앞 1차로) — M7 격자 기준
+        self._line_ctr = collections.deque(maxlen=40)    # 위 점 중 흰 가로선 (3차선 입구 선) 이 보일 때 잰 것만 — M7 격자 기준
+        self._lane_ctr = collections.deque(maxlen=60)    # 최근 1차로 가운데 점 (odom 좌표) — 노란 선 양쪽을 잡은 프레임만 (M7 격자 맞춤)
         self._yaw0, self._yaw0_buf = None, []   # 트랙 축 (출발 직선의 차선 방향, odom) — 차로 방향을 이 축 기준 90° 단위로 맞춤
         self._yaw_drift = self._yaw_drift_logged = 0.0   # 그 뒤 직선에서 잰 방향 흐름 (IMU 치우침)
         self._obs = []                     # 장애물 기억 (오도메트리 좌표): {'quads': 관측별 꼭짓점 4 개, 'c': 중심, 'seen': 시각}
@@ -538,6 +586,17 @@ class MissionManager(Node):
             pose = self.pose_at(stamp_s(msg.header))
             if pose is not None:
                 self._lane_dirs.append(wrap(pose[2] + msg.lane_heading_rad))
+                if msg.found and msg.yellow_side == 2 and abs(msg.lane_heading_rad) < math.radians(15.0):
+                    # 차선 가운데 = 차 앞 m7_line_fix_ahead_m, 옆 center_offset_m (+ 왼쪽) — odom 좌표 점으로 저장
+                    px, py, yw = pose
+                    ah, off = g('m7_line_fix_ahead_m'), msg.center_offset_m
+                    pt = (px + ah * math.cos(yw) - off * math.sin(yw), py + ah * math.sin(yw) + off * math.cos(yw))
+                    self._lane_ctr.append(pt)
+                    if msg.stop_line_dist_m > 0:
+                        self._line_ctr.append(pt)   # 흰 가로선 바로 앞 = 곧은 1차로 (코너 점이 안 섞임)
+                    if (abs(msg.curvature) < g('m7_entry_fix_curv') and msg.width_near_px > 0 and msg.width_far_px > 0
+                            and abs(msg.width_near_px - msg.width_far_px) <= g('m7_entry_fix_parallel_px')):
+                        self._entry_ctr.append(pt)  # 곧고 평행 = 코너·깔때기 아닌 1차로
         # M6: 톱니 지그재그 선 → 피팅 잔차가 커진다
         self._resid_hits = self._resid_hits + 1 if msg.line_resid_px >= g('m6_resid_on') else 0
         if self.state == 'M6_SLOW' and msg.line_resid_px >= g('m6_resid_off'):
@@ -628,6 +687,8 @@ class MissionManager(Node):
         for o in msg.obstacles:
             if o.y_left - o.y_right > g('m7_max_width_m'):
                 continue                   # LIMO (0.22 m) 보다 훨씬 넓음 = 바닥 (기울어짐)·벽 — 기억에도 안 넣음
+            if o.height > g('m7_max_height_m'):
+                continue                   # LIMO (0.25 m) 보다 훨씬 높음 = 트랙 밖 벽·사람 — 기억에도 안 넣음
             # 비스듬히·옆에서 본 관측: 보이는 면이 앞면이 아니라 가정 길이가 엉뚱한 쪽으로 붙는다 (차 뒤까지 늘어난 상자로 갇힘, 11-01)
             side_view = (abs(math.atan2((o.y_left + o.y_right) / 2, max(o.x_near, 0.05))) > math.radians(g('m7_oblique_deg'))
                          or o.x_near < CAR_HALF_L + 0.15)
@@ -688,7 +749,12 @@ class MissionManager(Node):
                     fx, fy = sum(p[0] for p in full) / 4, sum(p[1] for p in full) / 4
                     self._obs.append({'quads': [full], 'c': (fx, fy), 'seen': now, 'bottom': o.bottom})
             mid = (o.y_left + o.y_right) / 2
-            if (abs(mid) < g('m7_trigger_half_m') and o.x_near < g('m7_trigger_m')
+            hm = g('m7_trigger_half_m')
+            # 내 차로 = 장애물 가운데가 ±half 안, 또는 (m7_trigger_overlap) 장애물이 차가 갈 폭 ±half 에 조금이라도 걸침.
+            # 코너를 막 나와 차가 왼쪽을 향한 채면 가운데 LIMO 가 차 오른쪽 0.1–0.4 m 에 보여 가운데 기준으로는 늦게 켜짐
+            # → 깔때기에서 왼쪽으로 쏠린 뒤 켜져 격자가 반 차로 밀림 (2D 시뮬 11-09: 8 번 중 2–3 번, 갈림길 실패·유리벽)
+            inlane = (o.y_right < hm and o.y_left > -hm) if g('m7_trigger_overlap') else abs(mid) < hm
+            if (inlane and o.x_near < g('m7_trigger_m')
                     and o.y_left - o.y_right >= g('m7_min_width_m') and o.height >= g('m7_min_height_m')):
                 trig = True
         self.prune_obs(now)
@@ -761,6 +827,9 @@ class MissionManager(Node):
         """출발 직선 (노란 선 양쪽, 곧음) 의 차선 방향 m7_axis0_frames 장 평균 = 트랙 축. 오도메트리 0° 가 트랙과 틀어져 있어도
         (실차: 센서를 켠 뒤 차를 옮김 — 11-05 에 43°) 차로 방향을 이 축 기준 90° 단위로 맞출 수 있게."""
         n = int(self.get_parameter('m7_axis0_frames').value)
+        if self._yaw0 is None and self.get_parameter('m7_axis0_from_start').value and self._pos is not None:
+            self._yaw0 = self._yaw
+            self.get_logger().info(f'[축] 트랙 축 = odom {math.degrees(self._yaw0):.1f}° (출발 방향 — m7_axis0_from_start)')
         if self._yaw0 is not None:
             self.yaw_drift_update(msg)
             return
@@ -877,6 +946,52 @@ class MissionManager(Node):
         if self._m7.get('grid', {}).get('fixed'):
             return self._m7['grid']
         W = g('m7_lane_width_m')
+        if g('m7_entry_lane') >= 0:
+            # 들어간 자리 (차로 좌표 원점, l = 0) 가 m7_entry_lane 차로 가운데. 노란 선 보정 (line_corr) 은 m7_line_fix 가 phase 에 더함.
+            # 진입 직전 1차로 (노란 선 양쪽) 에서 잰 차선 가운데 점들이 있으면 그 l 중앙값으로 맞춘다 — 차가 가운데에서 6 cm 쯤 치우쳐
+            # 들어와 격자가 밀리고 옆 차로 LIMO 가 경계에 걸친 것처럼 보였다 (실차 11-06 full10: 노란 선 보정이 나중에 +6.5 cm)
+            ctr = 0.0
+            how = f'들어간 자리 = 차로 {int(g("m7_entry_lane"))} (트랙 구조)'
+            ef = None
+            if g('m7_entry_fix'):
+                # 3차선 입구 앞 1차로 (노란 선 양쪽, 곧고 평행) 에서 잰 차선 가운데 → 가운데 차로 중심. 깔때기에서 왼쪽으로 쏠린 뒤
+                # M7 이 켜져도 맞는 자리를 안다 (2D 시뮬 11-09: 8 번 중 2–3 번 0.35–0.4 m 왼쪽에서 켜져 격자가 반 차로 밀림 → 갈림길 실패·유리벽)
+                pts = [self.m7_frame(q) for q in self._entry_ctr]
+                ls = sorted(l for s_, l in pts if -g('m7_entry_fix_back_m') <= s_ <= 0.3 and abs(l) <= g('m7_entry_fix_max_m'))
+                if len(ls) >= g('m7_entry_fix_min_pts'):
+                    ef = ls[len(ls) // 2]
+                    ctr = ef
+                    how += f', 입구 앞 1차로에서 잰 가운데 {ef * 100:+.1f} cm 로 맞춤 ({len(ls)} 점, 흩어짐 {(ls[-1] - ls[0]) * 100:.0f} cm)'
+                else:
+                    how += f', 입구 앞 1차로 가운데 점 {len(ls)} 개 — 부족해 안 맞춤'
+            if ef is not None:
+                pass
+            elif g('m7_entry_stopline'):
+                # 3차선 입구 흰 가로선 앞 1차로 (노란 선 양쪽) 는 가운데 차로와 이어짐 → 그 선이 보일 때 잰 차선 가운데로 격자를 맞춘다
+                # (사용자 11-08 제안. 예전 m7_entry_center_fix 는 코너 점이 섞여 −109 cm 가 나왔음)
+                pts = [self.m7_frame(q) for q in self._line_ctr]
+                ls = sorted(l for s_, l in pts if -1.5 <= s_ <= 0.6 and abs(l) <= g('m7_entry_stopline_max_m'))
+                if len(ls) >= 3:
+                    ctr = ls[len(ls) // 2]
+                    how += f', 흰 가로선 앞에서 잰 차선 가운데 {ctr * 100:+.1f} cm 로 맞춤 ({len(ls)} 점)'
+                else:
+                    how += f', 흰 가로선 앞 차선 가운데 점 {len(ls)} 개 — 부족해 안 맞춤'
+            elif g('m7_entry_center_fix'):
+                pts = [self.m7_frame(q) for q in self._lane_ctr]
+                ls = sorted(l for s_, l in pts if -g('m7_entry_center_back_m') <= s_ <= 0.3)
+                if len(ls) >= 5:
+                    med = ls[len(ls) // 2]
+                    if abs(med) <= g('m7_entry_center_max_m'):
+                        ctr = med
+                        how += f', 진입 전 1차로 가운데 {med * 100:+.1f} cm 로 맞춤 ({len(ls)} 점)'
+                    else:
+                        how += f', 진입 전 1차로 가운데 {med * 100:+.1f} cm — 너무 커서 안 씀'
+                else:
+                    how += f', 진입 전 1차로 가운데 점 {len(ls)} 개 — 부족해 안 맞춤'
+            self._m7['grid'] = {'phase': ctr + self._m7.get('line_corr', 0.0), 'n_left': int(g('m7_entry_lane')),
+                                'how': how, 'fixed': True}
+            self.get_logger().info(f'[M7] 차로 격자 고정: {self._m7["grid"]["how"]}')
+            return self._m7['grid']
         sc, lc = self.m7_frame(self._pos)
         ls = []
         for ob in self._obs:                # 차 주변 (뒤 1 m ~, 옆 ±1.2 m) 의 정차 LIMO 만 — 지나온 표지판 등은 빼고
@@ -929,11 +1044,48 @@ class MissionManager(Node):
         if abs(h) > math.radians(g('m7_line_fix_heading_deg')):
             return
         W = g('m7_lane_width_m')
-        lc = self.m7_frame(pose[:2])[1]
+        sc_, lc = self.m7_frame(pose[:2])
         k = self.m7_k(round((lc - grid['phase']) / W))
-        if k != {-1: 0, 1: g('m7_lanes') - 1}[msg.yellow_side]:
-            return                         # 노란 선 쪽 끝 차로가 아니면 (가운데 차로에서 분리대 노란 선 등) 안 씀
+        edge = {-1: 0, 1: g('m7_lanes') - 1}[msg.yellow_side]
         meas = lc + g('m7_line_fix_ahead_m') * math.sin(h) + msg.center_offset_m * math.cos(h)
+        if k != edge:
+            # 끝 차로가 아니라고 믿는데 그쪽 노란 바깥선만 보임 = 위치가 크게 틀림 (실차 11-06 full13: 왼쪽 노란 선 위에 있는데
+            # 가운데 차로로 믿어 0.6 m 어긋남). 같은 값이 m7_line_relocate_frames 번 모이면 노란 선 쪽 끝 차로로 격자를 옮긴다.
+            # 3차선 끝의 A/B 분리대 노란 선과 헷갈리지 않게 구간 앞쪽 (s < m7_line_relocate_max_s) 에서만.
+            if not g('m7_line_relocate') or sc_ > g('m7_line_relocate_max_s'):
+                return
+            hd = math.radians(g('m7_line_relocate_heading_deg'))
+            if abs(h) > hd or abs(msg.lane_heading_rad) > hd:
+                return
+            # 보인 노란 선의 l 위치 (lane_follower 의 차선 가운데는 그 노란 선에서 반 차로 안쪽). 이 선이 세 차로의 왼쪽 끝일 수도,
+            # 오른쪽 끝일 수도 있다 — 덜 옮기는 쪽으로 본다. 차가 노란 선 밖으로 나가 있으면 왼쪽 끝 선이 차 오른쪽에 보인다
+            # (2D 시뮬 11-08 a7: 왼쪽 선 밖에서 '오른쪽 노란 선만' → 오른쪽 끝으로 +53.5 cm 옮겨 벽에 부딪힘)
+            line_l = meas + (W / 2 if msg.yellow_side < 0 else -W / 2)
+            hi_b = self.m7_lane_l(0) + W / 2
+            lo_b = self.m7_lane_l(g('m7_lanes') - 1) - W / 2
+            err = min((line_l - hi_b, line_l - lo_b), key=abs)
+            if abs(err) > g('m7_line_relocate_max_m'):
+                return
+            buf = m.setdefault('relocate', [])
+            buf.append(err)
+            n = g('m7_line_relocate_frames')
+            if len(buf) < n:
+                return
+            vals = sorted(buf[-n:])
+            buf.clear()
+            if vals[-1] - vals[0] > g('m7_line_relocate_spread_m'):
+                return                     # 측정이 흔들림 — 다른 선일 수 있음
+            d = vals[len(vals) // 2]
+            m['line_corr'] = m.get('line_corr', 0.0) + d
+            m['fix_corr'] = 0.0            # 작은 보정 상한은 새 위치부터 다시 (안 그러면 상한이 방금 옮긴 것을 되돌림 — 실차 11-06 full14:
+            #                                위치 다시 맞춤 직후 '+18.0 cm (합 −15.0)' 로 되돌아감, 2D 시뮬 11-08 도 같음)
+            grid['phase'] += d
+            m.setdefault('line_fix', []).clear()
+            self.get_logger().warn(f'[M7] 노란 선으로 위치 다시 맞춤: 차로 {k} 로 믿었지만 {"왼" if msg.yellow_side < 0 else "오른"}쪽 '
+                                   f'노란 바깥선만 보임 → 차로 {edge} 로, 격자 {d * 100:+.1f} cm 옮김 (s {sc_:.2f} m, {n} 장 중앙값, '
+                                   f'odom {self.fmt(self._pos)})')
+            return
+        m.pop('relocate', None)
         err = meas - self.m7_lane_l(k)
         if abs(err) > g('m7_line_fix_gate_m'):
             return
@@ -943,12 +1095,13 @@ class MissionManager(Node):
             return
         d = sorted(buf)[len(buf) // 2] * g('m7_line_fix_gain')
         buf.clear()
-        total = m.get('line_corr', 0.0)
+        total = m.get('fix_corr', 0.0)     # 작은 보정만의 합 (위치 다시 맞춤 제외)
         lim = g('m7_line_fix_max_m')
         d = max(-lim - total, min(lim - total, d))
         if abs(d) < 0.005:
             return
-        m['line_corr'] = total + d
+        m['fix_corr'] = total + d
+        m['line_corr'] = m.get('line_corr', 0.0) + d
         grid['phase'] += d                 # 고정된 격자도 같이 (m7_grid 가 다시 계산할 때는 line_corr 를 더함)
         self.get_logger().info(f'[M7] 노란 선으로 차로 {k} 가운데 보정 {d * 100:+.1f} cm (합 {m["line_corr"] * 100:+.1f} cm, + = 왼쪽), '
                                f'odom {self.fmt(self._pos)}')
@@ -982,6 +1135,11 @@ class MissionManager(Node):
         drop = []
         for ob in self._obs:
             if ob.get('bottom', 0.0) > g('m7_lidar_z') - g('m7_lidar_clear_below_m'):
+                if not ob.get('float_logged'):
+                    ob['float_logged'] = True
+                    b_ = self.m7_box(ob)
+                    self.get_logger().info(f'[M7] 떠 있는 장애물 (뎁스 가장 낮은 점 {ob.get("bottom", 0.0):.2f} m) — 라이다로 안 지움: '
+                                           f's {b_[0]:.2f}~{b_[1]:.2f} l {b_[2]:+.2f}~{b_[3]:+.2f}')
                 continue                           # 바닥에서 떠 있는 것 (분리대 위 표지판 판면 등) — 라이다 빔이 밑으로 지나감
             s0, s1, l0, l1 = self.m7_box(ob)
             s0, s1, l0, l1 = s0 + sh, s1 - sh, l0 + sh, l1 - sh
@@ -1027,6 +1185,54 @@ class MissionManager(Node):
             self._obs = [o for o in self._obs if o is not ob]
             self.get_logger().info(f'[M7] 라이다로 기억 지움: s {b[0]:.2f}~{b[1]:.2f} l {b[2]:+.2f}~{b[3]:+.2f} — 라이다 빔 {n} 개가 '
                                    f'맞지 않고 지나감 ({g("m7_lidar_clear_scans")} 번 연속, 관측 {len(ob["quads"])})')
+
+    def m7_lidar_trim(self, boxes, sc, lc, psi):
+        """뎁스로 기억한 상자 중 라이다에 가까운 것 (가까운 면이 m7_lidar_trim_reach_m 안) 은 차를 향한 면을 라이다 점까지 줄인다.
+        실차 11-06 full11: 오른쪽 차로 LIMO 를 왼쪽으로 34 cm 넓게 기억 (라이다 앞면은 l −0.42~−0.55, 기억은 −0.06 까지) →
+        가운데 차로가 막힌 것으로 보고 후진 반복. 라이다 점이 상자 근처에 3 개 이상 있을 때만 (없으면 가려졌을 수 있어 그대로).
+        상자를 넓히지는 않는다 (뎁스 상자보다 라이다 점이 바깥이면 라이다 점 상자 (scan_boxes) 가 따로 막는다)."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        xy = self.scan_xy()
+        if xy is None or len(xy[0]) == 0:
+            return boxes
+        c, s_ = math.cos(psi), math.sin(psi)
+        ps = sc + xy[0] * c - xy[1] * s_
+        pl = lc + xy[0] * s_ + xy[1] * c
+        lx = g('laser_x')
+        ls, ll = sc + c * lx, lc + s_ * lx
+        reach, pad, keep = g('m7_lidar_trim_reach_m'), g('m7_lidar_trim_pad_m'), g('m7_lidar_trim_min_m')
+        out = []
+        trimmed = []
+        for b in boxes:
+            s0, s1, l0, l1 = b
+            dn = math.hypot(max(s0 - ls, 0.0, ls - s1), max(l0 - ll, 0.0, ll - l1))
+            if dn > reach:
+                out.append(b)
+                continue
+            m = (ps > s0 - 0.15) & (ps < s1 + 0.15) & (pl > l0 - 0.15) & (pl < l1 + 0.15)
+            if m.sum() < 3:
+                out.append(b)
+                continue
+            qs, ql = ps[m], pl[m]
+            n0, n1, m0, m1 = s0, s1, l0, l1
+            if lc > l1 - 0.02:                     # 차가 상자 왼쪽 → 상자 왼쪽 면 (l1) 을 라이다 점까지
+                m1 = max(min(l1, float(ql.max()) + pad), l0 + keep)
+            elif lc < l0 + 0.02:                   # 차가 상자 오른쪽 → 오른쪽 면 (l0)
+                m0 = min(max(l0, float(ql.min()) - pad), l1 - keep)
+            if sc < s0:                            # 상자가 앞 → 앞면 (s0)
+                n0 = min(max(s0, float(qs.min()) - pad), s1 - keep)
+            nb = (n0, n1, m0, m1)
+            if max(abs(nb[i] - b[i]) for i in range(4)) > 0.05:
+                trimmed.append((b, nb))
+            out.append(nb)
+        if trimmed:
+            key = tuple(round(v, 1) for b, nb in trimmed for v in nb)
+            if key != self._m7.get('trim_key'):
+                self._m7['trim_key'] = key
+                self.get_logger().info('[M7] 라이다로 상자 줄임: ' + ', '.join(
+                    f's {b[0]:.2f}~{b[1]:.2f} l {b[2]:+.2f}~{b[3]:+.2f} → s {nb[0]:.2f}~{nb[1]:.2f} l {nb[2]:+.2f}~{nb[3]:+.2f}'
+                    for b, nb in trimmed))
+        return out
 
     def scan_xy(self):
         """최근 라이다 점 (base_link x, y) — 0.3 s 넘게 끊겼으면 None."""
@@ -1077,8 +1283,11 @@ class MissionManager(Node):
                                     f'실패 ({reason}) — 멈춤. 장애물 배치·/perception/obstacle_markers 확인 필요 | {self.m7_dump()}')
             return
         rf = self.rear_free()
-        m['back'] = {'from': self._pos, 't': now}
-        self.get_logger().warn(f'[M7] 막힘: {reason} → 후진 {g("m7_back_m"):.2f} m (같은 자리 {count}/{g("m7_retry_max")} 번째, '
+        # 같은 자리에서 다시 막히면 더 많이 물러남 (0.15 → 0.30 → 0.45 m) — 같은 거리만 물러나면 같은 판단·같은 자리로 돌아와
+        # 앞뒤만 반복했다 (실차 11-06 full11: 두 상자 사이 틈으로 꺾을 거리가 모자람)
+        back_m = g('m7_back_m') * (min(count, g('m7_back_grow_max')) if g('m7_back_grow') else 1)
+        m['back'] = {'from': self._pos, 't': now, 'm': back_m}
+        self.get_logger().warn(f'[M7] 막힘: {reason} → 후진 {back_m:.2f} m (같은 자리 {count}/{g("m7_retry_max")} 번째, '
                                f'뒤 라이다 빈 거리 {"없음(라이다 안 들어옴)" if rf is None else f"{rf:.2f} m"})')
 
     def m7_tick(self, now):
@@ -1093,9 +1302,26 @@ class MissionManager(Node):
         W = g('m7_lane_width_m')
         half_lane = W / 2 - g('m7_lane_margin_m')
         boxes = [self.m7_box(ob) for ob in self._obs]
+        if g('m7_lidar_trim'):
+            boxes = self.m7_lidar_trim(boxes, sc, lc, psi)
         near = [b for b in boxes if b[1] > sc - 0.8 and b[0] < sc + g('m7_check_m') + 0.5 and abs((b[2] + b[3]) / 2 - lc) < 1.3]
         # 라이다 점도 (범퍼 0.06 m 밖부터 정확) — 뎁스 기억은 가까이서 실제보다 멀게 잡힐 때가 있다 (11-02 시험: 17 cm)
         near += avoid.scan_boxes(self.scan_xy(), sc, lc, psi)
+        if g('m7_drop_outside'):
+            # 세 차로 밖 (맨 왼쪽 차로 왼쪽 끝 ~ 맨 오른쪽 차로 오른쪽 끝 밖) 에 중심이 있는 상자는 트랙 밖 벽·물건
+            l_hi = self.m7_lane_l(0) + W / 2
+            l_lo = self.m7_lane_l(g('m7_lanes') - 1) - W / 2
+            inside = lambda b: l_lo <= (b[2] + b[3]) / 2 <= l_hi   # noqa: E731
+            boxes = [b for b in boxes if inside(b)]
+            near = [b for b in near if inside(b)]
+        walls = []
+        if g('m7_outer_wall'):
+            # 세 차로 바깥 (노란 선 밖) 을 벽으로 — 쓸기 검사에서 노란 선 밖으로 나가는 방향을 막는다 (실차 11-06 full13: 노란 선 위로
+            # 나가 갇힘). 차로를 고르는 데는 안 씀. 이미 벽 안에 들어가 있으면 escape 가 그 벽에서 멀어지는 방향만 허용
+            hi = self.m7_lane_l(0) + W / 2 + g('m7_outer_wall_off_m')
+            lo = self.m7_lane_l(g('m7_lanes') - 1) - W / 2 - g('m7_outer_wall_off_m')
+            walls = [(sc - 2.0, sc + 2.0, hi, hi + 0.30), (sc - 2.0, sc + 2.0, lo - 0.30, lo)]
+            near = near + walls   # 앞뒤 대칭 (벽 안에 들어가 있어도 벽에서 멀어지는 쪽으로는 나감)
         if g('m7_lidar_clear'):
             self.m7_lidar_clear(sc, lc, psi, wz)
         k_lim = lambda x: max(-g('m7_max_w'), min(g('m7_max_w'), x))   # noqa: E731
@@ -1108,8 +1334,18 @@ class MissionManager(Node):
             d = [b[0] - sf for b in boxes if in_lane(b, k) and b[1] > sc]
             return min(d) if d else math.inf
 
-        def window_free(j, s0, s1):          # 차로 j 의 [s0, s1] 에 걸친 장애물이 없는가
-            return not any(in_lane(b, j) and b[1] > s0 and b[0] < s1 for b in boxes)
+        def window_free(j, s0, s1, skip=None):   # 차로 j 의 [s0, s1] 에 걸친 장애물이 없는가
+            # skip: 지금 비켜 가려는 (내 차로를 막은) 장애물 — 옆 차로 선을 조금 넘었어도 (겹침 ≤ m7_skip_overlap_m) 그 차로를
+            # 막은 것으로 치지 않는다. 실제로 닿는지는 쓸기 검사가 본다 (실차 11-06 full8: 가운데 LIMO 가 오른쪽 차로에
+            # 5 cm 걸쳐 '오른쪽도 막힘' → 빈 오른쪽 차로로 못 감)
+            lo, hi = self.m7_lane_l(j) - W / 2, self.m7_lane_l(j) + W / 2
+            def blocks(b):
+                # 어떤 장애물이든 차로 j 를 조금만 (≤ m7_skip_overlap_m) 걸치면 막은 것으로 안 침 — 옆 차로 LIMO 끝이 경계에 걸쳐
+                # 가운데로 못 돌아오고 후진 반복 (실차 11-06 full10). 실제로 닿는지는 쓸기 검사가 본다
+                if min(b[3], hi) - max(b[2], lo) <= g('m7_skip_overlap_m'):
+                    return False
+                return in_lane(b, j) and b[1] > s0 and b[0] < s1
+            return not any(blocks(b) for b in boxes)
 
         def after(j, s0):                    # s0 뒤 차로 j 의 첫 장애물 앞면까지
             d = [b[0] - s0 for b in boxes if in_lane(b, j) and b[0] >= s0]
@@ -1137,7 +1373,8 @@ class MissionManager(Node):
             moved = self.dist_from(bk['from'])
             rf = self.rear_free()
             mem = self.m7_free(sc, lc, psi, near, 0.06, -1.0)
-            why = ('끝' if moved >= g('m7_back_m') else '시간 초과' if now - bk['t'] > g('m7_back_timeout_s')
+            bm = bk.get('m', g('m7_back_m'))
+            why = ('끝' if moved >= bm else '시간 초과' if now - bk['t'] > g('m7_back_timeout_s') * bm / g('m7_back_m')
                    else f'뒤 라이다 {rf:.2f} m' if rf is not None and rf < g('m7_back_lidar_m')
                    else '뒤 기억 장애물' if mem < 0.06 else None)
             if why is None:
@@ -1146,9 +1383,54 @@ class MissionManager(Node):
                 return
             m['back'] = None
             m['rechoose'] = True
-            self.get_logger().info(f'[M7] 후진 {why}: {moved:.2f} m 물러남 → 차로 다시 고르기')
+            m['probe_req'] = bool(g('m7_probe'))
+            self.get_logger().info(f'[M7] 후진 {why}: {moved:.2f} m 물러남 → '
+                                   f'{"라이다로 가장 빈 방향 찾기" if m["probe_req"] else "차로 다시 고르기"}')
             self.m7_publish(0.0, 0.0)
             return
+        # 2b) 후진 뒤 라이다 탐색 직진 — 기억 (뎁스) 은 빼고 라이다 점 + 세 차로 밖 가상 벽만 본다
+        if m.get('probe_req') or m.get('probe'):
+            lid = avoid.scan_boxes(self.scan_xy(), sc, lc, psi) + walls
+            if m.pop('probe_req', False):
+                stp, lim = math.radians(g('m7_probe_step_deg')), g('m7_probe_deg')
+                res = []
+                for i in range(-int(lim / g('m7_probe_step_deg')), int(lim / g('m7_probe_step_deg')) + 1):
+                    h = i * stp
+                    fr = self.m7_free(sc, lc, h, lid, 1.2)
+                    if abs(wrap(h - psi)) >= math.radians(3.0) and not self.m7_rot_ok(sc, lc, psi, h, lid):
+                        continue
+                    res.append((h, fr))
+                best = max(res, key=lambda r: (round(min(r[1], 1.2), 1), -abs(r[0])), default=None)
+                if best is not None and best[1] >= g('m7_probe_min_m'):
+                    m['probe'] = {'h': best[0], 'from': self._pos, 't': now}
+                    self.get_logger().info(f'[M7] 라이다 탐색: 가장 빈 방향 {math.degrees(best[0]):+.0f}° ({best[1]:.2f} m 빔) 으로 '
+                                           f'{g("m7_probe_m"):.2f} m 가 봄 | ' + ', '.join(f'{math.degrees(h):+.0f}° {fr:.2f}' for h, fr in res))
+                else:
+                    self.get_logger().info(f'[M7] 라이다 탐색: 충분히 빈 방향 없음 ({"없음" if best is None else f"최대 {best[1]:.2f} m"}) — 원래대로')
+            pr = m.get('probe')
+            if pr is not None:
+                moved = self.dist_from(pr['from'])
+                err = wrap(pr['h'] - psi)
+                fr = self.m7_free(sc, lc, psi, lid, 0.6)
+                end = ('다 감' if moved >= g('m7_probe_m') else '시간 초과' if now - pr['t'] > g('m7_probe_timeout_s')
+                       else f'앞 {fr:.2f} m 막힘' if abs(err) < math.radians(5.0) and fr < g('m7_stop_gap_m') + 0.05 else None)
+                if end is not None:
+                    m['probe'] = None
+                    m['rechoose'] = True
+                    self.get_logger().info(f'[M7] 라이다 탐색 끝 ({end}): {moved:.2f} m → 차로 다시 고르기')
+                else:
+                    w = k_lim(g('m7_k_heading') * err - g('m7_kd_heading') * wz)
+                    v = 0.0 if abs(err) > math.radians(8.0) else min(g('m7_change_speed'), g('m7_kv') * (fr - g('m7_stop_gap_m')))
+                    v = 0.0 if v < 0.02 else v
+                    self.m7_mode('probe', f'라이다 탐색 직진 {math.degrees(pr["h"]):+.0f}°')
+                    why = m['mon'].update(now, self._pos, yaw, v, w)
+                    if why is not None:
+                        m['probe'] = None
+                        self.m7_back_start(now, why)
+                        self.m7_publish(0.0, 0.0)
+                        return
+                    self.m7_publish(v, w)
+                    return
         # 3) 갈 차로 — 내 (목표) 차로가 m7_block_m 안에서 막히면. 변경 중이어도 막혔으면 (rechoose) 다시 고른다
         k = self.m7_k(m['n'])
         lt = self.m7_lane_l(k)
@@ -1162,7 +1444,10 @@ class MissionManager(Node):
             k = self.m7_k(here)
             lt = self.m7_lane_l(k)
             changing = abs(lc - lt) > g('m7_lane_done_m')
-        own = [b for b in boxes if in_lane(b, k) and b[1] > sc]
+        # 내 차로를 막은 장애물 = 앞면이 차 앞보다 앞인 것만. 이미 차 옆에 있는 (옆 차로에서 조금 걸친) 상자를 고르면 그 상자 기준
+        # 창으로 옆 차로를 검사해 지나온 장애물에 걸려 '옆 차로도 막힘' 이 된다 (실차 11-06 full4: 왼쪽 LIMO 가 4 cm 걸쳐 멈춤).
+        # 옆 상자는 쓸기 검사 (near) 에는 그대로 들어간다.
+        own = [b for b in boxes if in_lane(b, k) and b[1] > sc and b[0] > sf - 0.05]
         o = min(own, key=lambda b: b[0]) if own else None
         a_own = o[0] - sf if o else math.inf
         rechoose = m.pop('rechoose', False)
@@ -1174,7 +1459,7 @@ class MissionManager(Node):
             kh = self.m7_k(here)
             # 후보: 막은 장애물을 지나가는 구간 [앞면 − window, 뒷면 + 0.15] 이 비어 있는 옆 차로, 변경 중이면 지금 위치 차로도
             cands = sorted({j for j in (k - 1, k + 1, kh)
-                            if 0 <= j < g('m7_lanes') and j != k and window_free(j, o[0] - g('m7_enter_window_m'), o[1] + 0.15)})
+                            if 0 <= j < g('m7_lanes') and j != k and window_free(j, o[0] - g('m7_enter_window_m'), o[1] + 0.15, skip=o)})
             jg = None if goal is None or goal == k else k + (1 if goal > k else -1)
             far = None if goal is None else g('m7_lanes') - 1 - goal
             fl = m.get('failed')
@@ -1226,7 +1511,14 @@ class MissionManager(Node):
             fr = self.m7_free(sc, lc, h, near, dm)
             rok = abs(wrap(h - psi)) < math.radians(3.0) or self.m7_rot_ok(sc, lc, psi, h, near)
             res.append((h, fr, rok, dm))
-        go = [r for r in res if r[2] and r[1] >= min(g('m7_go_free_m'), r[3] - 0.01)]
+        def reach_ok(r):
+            # 차로 변경 중 비스듬한 방향은 목표 차로 (가운데 − m7_reach_slack_m) 까지 끝까지 비어 있을 때만 — 조금만 비어도 꺾으면
+            # 옆 LIMO 옆면에 비스듬히 붙어 갇힌다 (실차 11-06 full2: +45° 0.36 m 빔 → 가운데 LIMO 옆에서 후진 반복).
+            # 못 가면 지금 방향 (0°) 으로 직진하다가 옆이 열리면 꺾는다.
+            if not changing or abs(r[0]) <= 0.09:
+                return True
+            return r[1] * math.sin(abs(r[0])) >= abs(lt - lc) - g('m7_reach_slack_m')
+        go = [r for r in res if r[2] and r[1] >= min(g('m7_go_free_m'), r[3] - 0.01) and reach_ok(r)]
         v = w = 0.0
         if go:
             h, fr, _, dm = min(go, key=lambda r: (round(abs(wrap(r[0] - psi_pp)), 3), -r[1]))
@@ -1250,7 +1542,7 @@ class MissionManager(Node):
             blocked = v == 0.0 and not turn_first
         else:
             cur = max((r[1] for r in res if abs(wrap(r[0] - psi)) < math.radians(3.0)), default=0.0)
-            rots = [r for r in res if r[2] and abs(wrap(r[0] - psi)) >= math.radians(3.0)]
+            rots = [r for r in res if r[2] and abs(wrap(r[0] - psi)) >= math.radians(3.0) and reach_ok(r)]
             best = max(rots, key=lambda r: r[1], default=None)
             if best is not None and best[1] > max(cur, 0.0) + 0.05:
                 w = k_lim(g('m7_k_heading') * wrap(best[0] - psi) - g('m7_kd_heading') * wz)
@@ -1432,7 +1724,8 @@ class MissionManager(Node):
             now = self.get_clock().now().nanoseconds * 1e-9
             self._m8 = {'start': self._pos, 't0': now, 'mode': None, 'back': None, 'target': None, 'forced': False,
                         'mon': StuckMonitor(g('m8_stuck_check_s'), g('m7_stuck_move_m'), g('m7_stuck_rot_deg')),
-                        'retry': RetryCounter(g('m7_retry_radius_m')), 'backs': 0, 'slow_n': 0, 'n': 0, 'seen': [], 'exit': None}
+                        'retry': RetryCounter(g('m7_retry_radius_m')), 'backs': 0, 'slow_n': 0, 'n': 0, 'seen': [], 'exit': None,
+                        'lane_dir': self.lane_axis()[0]}
             self.set_state('M8_AVOID', f'앞 {g("m8_trigger_m")} m 안 라바콘 {len(ahead)} 개 (양쪽), {self._m8_hits} 번 연속, '
                                        f'odom {self.fmt(self._pos)}')
 
@@ -1478,6 +1771,12 @@ class MissionManager(Node):
         d = last - first
         if d[0] * math.cos(self._yaw) + d[1] * math.sin(self._yaw) < 0:
             first, last, d = last, first, -d
+        ld = m.get('lane_dir')
+        if self.get_parameter('m8_exit_lane').value and ld is not None:
+            # 차로 가운데선: 첫 쌍 가운데 (차선 추종으로 차로 가운데에서 들어온 곳) + 들어올 때 차로 방향
+            if math.cos(wrap(ld - math.atan2(d[1], d[0]))) < 0:
+                ld = wrap(ld + math.pi)
+            return (float(first[0]), float(first[1])), ld
         return (float(last[0]), float(last[1])), math.atan2(d[1], d[0])
 
     def m8_axis_aim(self, mid, hd, look):

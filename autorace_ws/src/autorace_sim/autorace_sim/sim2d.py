@@ -150,6 +150,7 @@ class Sim2D(Node):
         # 시설물
         p('static_limos', True)
         p('static_layout', 'default')       # default (첫 줄 차로 0 으로 진입) | mirror (차로 2 로 진입)
+        p('static_layout_xy', [0.0])        # 직접 배치 [x1, y1, x2, y2, ...] (yaw 180) — 길이 2 이상이면 static_layout 대신 (랜덤 간격 시험)
         p('parking_limos', True)
         p('cones', True)
         p('cone_layout', 'default')
@@ -174,6 +175,16 @@ class Sim2D(Node):
         p('bystander_d', 0.09)
         p('bystander_step', [0.0, 0.0])    # 사람이 발을 옮김: bystander_step_s 마다 다리가 이만큼 [dx, dy] 갔다 왔다 (0 = 가만히)
         p('bystander_step_s', 2.0)
+        # 실차 (11-06 연습장): 트랙 밖 유리벽·유리문 — 뎁스엔 장애물로 잡힘 (M3 뒤 코너 정면, 3차선 왼쪽 옆)
+        p('glass_walls', False)
+        p('glass_wall_segs', [3.5, -0.40, 10.3, -0.40])   # 벽 선분 [x1, y1, x2, y2, ...] (트랙 판 밖). 실차: 코너 정면 1.6–2.5 m (M7 켜는 1.2 m 보다 멂), 3차선 왼쪽 0.75–1.6 m
+        p('glass_wall_h', 2.0)
+        p('glass_lidar', False)            # 라이다에도 보이나 (유리는 레이저가 대부분 통과 — 실차 확인 안 됨)
+        # 실차: 현수막 위에서 빠른 제자리 회전이면 바퀴가 헛돎 (휠 odom 132° / IMU ≈ 0°, 명령 w 1.5)
+        p('pivot_slip_w', 1.2)             # 이 회전 [rad/s] 이상 + 거의 멈춘 채면 헛돎 후보
+        p('pivot_slip_v', 0.05)
+        p('pivot_slip_ratio', 1.0)         # 헛돌 때 몸체 회전 = 바퀴 회전 × 이것 (1.0 = 끔)
+        p('pivot_slip_prob', 1.0)          # 제자리 회전 한 번마다 헛돌 확률
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.g = g
         self.rng = random.Random(g('seed') or None)
@@ -280,7 +291,10 @@ class Sim2D(Node):
         if g('static_limos'):
             layout = [[7.85, 0.94, 180], [7.85, 1.46, 180], [6.95, 0.42, 180], [6.95, 1.46, 180],
                       [6.05, 0.94, 180], [5.15, 0.42, 180], [5.15, 1.46, 180]]     # default: 첫 줄은 차로 0 (왼쪽) 만 빔
-            if g('static_layout') == 'mirror':
+            xy = list(g('static_layout_xy'))
+            if len(xy) >= 2:
+                layout = [[xy[i], xy[i + 1], 180] for i in range(0, len(xy) - 1, 2)]
+            elif g('static_layout') == 'mirror':
                 layout = [[x, 1.88 - y, yaw] for x, y, yaw in layout]         # 가운데 차로 기준 좌우 뒤집음: 첫 줄은 차로 2 (오른쪽) 만 빔
             for i, (x, y, yaw) in enumerate(layout):
                 self.boxes.append(Box('limo', x, y, math.radians(yaw), name=f'M7_LIMO_{i}', **limo))
@@ -301,13 +315,21 @@ class Sim2D(Node):
         for i in range(len(bs) // 2):
             h = g('bystander_d') / 2
             self.boxes.append(Box('leg', bs[2 * i], bs[2 * i + 1], 0.0, h, h, 0.0, 0.9, (0x30, 0x40, 0x70), name=f'leg_{i}'))
+        if g('glass_walls'):
+            ws = list(g('glass_wall_segs'))
+            for i in range(len(ws) // 4):
+                x1, y1, x2, y2 = ws[4 * i:4 * i + 4]
+                self.boxes.append(Box('glass', (x1 + x2) / 2, (y1 + y2) / 2, math.atan2(y2 - y1, x2 - x1),
+                                      math.hypot(x2 - x1, y2 - y1) / 2, 0.02, 0.0, g('glass_wall_h'),
+                                      (0xa8, 0xb4, 0xb8), name=f'glass_{i}'))
+        self._slip = False
         if g('traffic_light'):
             self.boxes.append(Box('light', 3.95, 4.47, math.pi, 0.035, 0.06, 0.10, 0.305, (0x15, 0x15, 0x15), name='traffic_light'))
             self.boxes.append(Box('pole', 3.95, 4.47, 0.0, 0.01, 0.01, 0.0, 0.10, (0x30, 0x30, 0x30), name='light_pole'))
             self.boxes.append(Box('monitor', 3.95, 4.20, math.pi, 0.01, 0.16, 0.10, 0.28, (0x40, 0x48, 0x60), name='ad_monitor'))
         # 표지판 (판면만 — 라이다 높이보다 위, 지주는 얇아 생략)
         for name, x, y, face, col in (('M5_slow', 2.75, 5.95, 180, (0xd0, 0x30, 0x30)), ('M5_bump', 3.45, 5.95, 180, (0xe0, 0xc0, 0x20)),
-                                      ('M3_ped', 9.20, 2.50, 90, (0x20, 0x60, 0xd0)), ('M4_parking', 5.95, 4.45, 180, (0x20, 0x50, 0xc0)),
+                                      ('M3_ped', 9.20, 2.50, 90, (0x20, 0x60, 0xd0)), ('M4_parking', 5.63, 4.45, 180, (0x20, 0x50, 0xc0)),
                                       ('M2_branch', 4.20, 0.94, 0, (0x20, 0x60, 0xd0))):
             self.boxes.append(Box('sign', x, y, math.radians(face), 0.005, 0.06, 0.14, 0.26, col, name=name))
             if g('sign_posts'):
@@ -435,7 +457,7 @@ class Sim2D(Node):
 
     def box_rect(self, b, C, R, W, H):
         """물체가 화면에 차지하는 사각형 (여유 2 px). 안 보이면 None."""
-        if (b.x - C[0]) ** 2 + (b.y - C[1]) ** 2 > max(16.0, self.g('sign_range_m') ** 2):
+        if b.kind != 'glass' and (b.x - C[0]) ** 2 + (b.y - C[1]) ** 2 > max(16.0, self.g('sign_range_m') ** 2):
             return None
         pts = np.array([(x, y, z) for x, y in b.corners2d() for z in (b.z0, b.z1)])
         pc = (pts - C) @ R.T
@@ -471,7 +493,7 @@ class Sim2D(Node):
         dx, dy = np.cos(a + self.yaw), np.sin(a + self.yaw)
         r = np.full(n, np.inf)
         for b in self.boxes:
-            if not b.alive or not (b.z0 <= LIDAR_Z <= b.z1):
+            if not b.alive or not (b.z0 <= LIDAR_Z <= b.z1) or (b.kind == 'glass' and not g('glass_lidar')):
                 continue
             c, s = math.cos(b.yaw), math.sin(b.yaw)
             ox, oy = (lx - b.x) * c + (ly - b.y) * s, -(lx - b.x) * s + (ly - b.y) * c
@@ -535,14 +557,23 @@ class Sim2D(Node):
         vc, wc = vc * g('act_v_gain'), wc * g('act_w_gain')   # 실제 차가 명령보다 덜·더 감/돎 (스키드·배터리)
         self.v += (vc - self.v) * min(1.0, dt / g('tau_v'))
         self.w += (wc - self.w) * min(1.0, dt / g('tau_w'))
-        nyaw = wrap(self.yaw + self.w * dt)
-        nx = self.x + self.v * dt * math.cos(self.yaw + 0.5 * self.w * dt)
-        ny = self.y + self.v * dt * math.sin(self.yaw + 0.5 * self.w * dt)
+        # 바퀴 헛돎: 빠른 제자리 회전이면 바퀴는 도는데 몸체는 덜 돎 (휠 odom 은 바퀴, IMU 는 몸체)
+        pivot = abs(self.w) >= g('pivot_slip_w') and abs(self.v) < g('pivot_slip_v')
+        if pivot and not getattr(self, '_pivot', False):
+            self._slip = g('pivot_slip_ratio') < 1.0 and self.rng.random() < g('pivot_slip_prob')
+            if self._slip:
+                self.get_logger().warn(f'[sim2d] 바퀴 헛돎 시작: w {self.w:+.2f} → 몸체 ×{g("pivot_slip_ratio")} '
+                                       f'— 차 ({self.x:.2f}, {self.y:.2f})')
+        self._pivot = pivot
+        bw = self.w * g('pivot_slip_ratio') if (pivot and self._slip) else self.w
+        nyaw = wrap(self.yaw + bw * dt)
+        nx = self.x + self.v * dt * math.cos(self.yaw + 0.5 * bw * dt)
+        ny = self.y + self.v * dt * math.sin(self.yaw + 0.5 * bw * dt)
         rect = self.car_rect(nx, ny, nyaw)
         blocked = None
         for b in self.boxes:
-            if b.alive and b.kind in ('limo', 'cone', 'cone_base', 'light', 'pole', 'monitor', 'leg') and \
-                    (b.x - nx) ** 2 + (b.y - ny) ** 2 < 0.6 and rects_overlap(rect, b.corners2d()):
+            if b.alive and b.kind in ('limo', 'cone', 'cone_base', 'light', 'pole', 'monitor', 'leg', 'glass') and \
+                    (b.kind == 'glass' or (b.x - nx) ** 2 + (b.y - ny) ** 2 < 0.6) and rects_overlap(rect, b.corners2d()):
                 if b.kind.startswith('cone'):
                     if b.name not in self.knocked:
                         self.knocked.add(b.name)
@@ -558,18 +589,18 @@ class Sim2D(Node):
                 self.get_logger().error(f'[sim2d] 충돌: {blocked.name} — 차 ({self.x:.2f}, {self.y:.2f}) yaw {math.degrees(self.yaw):.0f}°')
             self.hits[blocked.name] = self.hits.get(blocked.name, 0) + 1
             self.v = self.w = 0.0
-            moved_v, moved_w = 0.0, 0.0
+            moved_v, moved_w, body_w = 0.0, 0.0, 0.0
         else:
             self.x, self.y, self.yaw = nx, ny, nyaw
-            moved_v, moved_w = self.v, self.w
+            moved_v, moved_w, body_w = self.v, self.w, bw
         # 오도메트리 (배율 오차 포함, 출발 자세 기준)
         ov, ow = moved_v * g('odom_v_scale'), moved_w * g('odom_w_scale')
         self.ox += ov * dt * math.cos(self.oyaw + 0.5 * ow * dt)
         self.oy += ov * dt * math.sin(self.oyaw + 0.5 * ow * dt)
         self.oyaw = wrap(self.oyaw + ow * dt)
         self.odom_tw = (ov, ow)
-        self.true_w = moved_w
-        self.imu_yaw = wrap(self.imu_yaw + moved_w * dt)
+        self.true_w = body_w
+        self.imu_yaw = wrap(self.imu_yaw + body_w * dt)
         self.track_stats(dt)
         self.pub_clock.publish(Clock(clock=stamp(self.sim_t)))
         st = stamp(self.sim_t)
@@ -632,7 +663,10 @@ class Sim2D(Node):
             if gap is not None:
                 self.stats['stops'].append(round(gap, 4))
                 msg = f'[sim2d] 정지선 앞 정지: 바퀴 맨 앞 → 정지선 {gap * 100:+.1f} cm — 차 ({self.x:.2f}, {self.y:.2f})'
-                (self.get_logger().warn if gap < 0 else self.get_logger().info)(msg + (' — 정지선 밟음' if gap < 0 else ''))
+                if gap < 0:   # 한 줄에서 심각도를 바꾸면 rclpy (Jazzy) 가 ValueError 로 노드를 죽임
+                    self.get_logger().warning(msg + ' — 정지선 밟음')
+                else:
+                    self.get_logger().info(msg)
         if self.prev_xy is not None:
             self.stats['dist_m'] += math.dist(self.prev_xy, (self.x, self.y))
         self.prev_xy = (self.x, self.y)

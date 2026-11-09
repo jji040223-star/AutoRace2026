@@ -73,6 +73,7 @@ class ParkingController(Node):
         p('side_probe_dx', 0.04)           # 차 중심 옆 라이다 띠 (진행 방향 ±)
         p('side_near_m', 0.75)             # 옆 이 안 = 가까움 (LIMO)
         p('side_far_m', 0.95)              #   이 밖·없음 = 멂 (빈 칸)
+        p('limo_min_len_m', 0.20)          # 옆 '가까움' 구간이 진행 방향으로 이보다 짧으면 LIMO 아님 (표지판 기둥 등). LIMO 옆에서 보이는 폭 0.22  # 0.12 → 0.20 (2D 시뮬 11-09 g2: 기둥이 0.129 m 로 재져 LIMO 로 착각. 기둥 실차 0.06–0.08 · 시뮬 ~0.10, LIMO 0.29–0.34)
         p('gap_min_m', 0.45)               # 빈 칸 폭 (LIMO 옆면 사이) 최소 — 차 폭 0.22 + 여유
         p('gap_max_m', 1.30)
         p('limo_half_l', 0.161)            # 이웃 LIMO 반 길이 (끝면 → 칸 깊이 가운데)
@@ -527,13 +528,20 @@ class ParkingController(Node):
         near = d is not None and d < g('side_near_m')
         far = d is None or d > g('side_far_m')
         if pr['phase'] == 'near1' and near:
-            pr['phase'] = 'in_near1'
+            pr['phase'], pr['near0'], pr['near_d'] = 'in_near1', a, [d]
         elif pr['phase'] == 'in_near1':
             if near:
                 pr['near_d'].append(d)
             elif far:
-                pr['phase'], pr['far0'] = 'far', a
-                self.get_logger().info(f'[M4] 옆: 가까움 → 멂 (LIMO 끝, 진행 {a:.3f} m, LIMO 끝면까지 {np.median(pr["near_d"]):.3f} m)')
+                ln = a - pr.get('near0', a)
+                if ln < g('limo_min_len_m'):
+                    # 표지판 기둥·사람 다리처럼 짧은 물체 — LIMO 가 아님 (실차 11-06 full10: P 표지판 기둥과 첫 LIMO 사이에 주차)
+                    pr['phase'], pr['near_d'] = 'near1', []
+                    self.get_logger().info(f'[M4] 옆 물체 길이 {ln:.3f} m < {g("limo_min_len_m")} — LIMO 아님 (표지판 등), 다음 LIMO 를 찾음')
+                else:
+                    pr['phase'], pr['far0'] = 'far', a
+                    self.get_logger().info(f'[M4] 옆: 가까움 → 멂 (LIMO 끝, 길이 {ln:.3f} m, 진행 {a:.3f} m, '
+                                           f'LIMO 끝면까지 {np.median(pr["near_d"]):.3f} m)')
         elif pr['phase'] == 'far' and near:
             self.row_ref = d                   # 줄 맞추기 기준을 LIMO 마다 새로 (첫 LIMO 기준이면 다음 LIMO 끝에서 2° 꺾임)
             w = a - pr['far0']
@@ -551,7 +559,7 @@ class ParkingController(Node):
                                         f'{depth:.3f} m, odom ({cx:.2f}, {cy:.2f}) — 시작 뒤 {now - self.t0:.1f} s')
                 self.pub(0.0, 0.0)
                 return
-            pr['phase'], pr['near_d'] = 'in_near1', [d]
+            pr['phase'], pr['near0'], pr['near_d'] = 'in_near1', a, [d]
             self.get_logger().info(f'[M4] 틈 {w:.3f} m — 칸 폭이 아님, 다음 틈을 찾음')
         if new_scan:
             pr['a_prev'], pr['scan_t'], pr['a_edge'] = a_now, self.scan_t, a

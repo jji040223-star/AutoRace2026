@@ -1,0 +1,17 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- 2D 시뮬 (한 컴퓨터 안) 전용: 카메라 영상 (0.9 MB) 을 공유 메모리로. 기본 UDP 는 수신 버퍼 (0.2 MB) 가 작아 영상이 대부분 버려짐 -->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles">
+  <transport_descriptors>
+    <transport_descriptor>
+      <transport_id>shm_big</transport_id>
+      <type>SHM</type>
+      <segment_size>16777216</segment_size>
+    </transport_descriptor>
+  </transport_descriptors>
+  <participant profile_name="sim_shm" is_default_profile="true">
+    <rtps>
+      <userTransports><transport_id>shm_big</transport_id></userTransports>
+      <useBuiltinTransports>false</useBuiltinTransports>
+    </rtps>
+  </participant>
+</profiles>

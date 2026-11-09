@@ -1,0 +1,3 @@
+sim2d:
+  ros__parameters:
+    glass_walls: false

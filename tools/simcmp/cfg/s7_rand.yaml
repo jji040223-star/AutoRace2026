@@ -1,0 +1,5 @@
+sim2d:
+  ros__parameters:
+    cone_layout: curvy
+    seed: 27
+    static_layout_xy: [7.82, 0.42, 7.88, 0.94, 7.09, 0.94, 7.08, 0.42, 6.19, 0.94, 6.19, 0.42, 5.22, 0.42]
