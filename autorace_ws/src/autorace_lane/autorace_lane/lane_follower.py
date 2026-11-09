@@ -114,6 +114,10 @@ class LaneFollower(Node):
         p('curve_slow', 0.5)               # 원본과 같음: v = linear_speed × (1 − curve_slow × |curvature|)
         p('curve_steer_bias', 0.5)         # 원본과 같은 식: 곡률 feed-forward (목표 offset 에 + bias × curvature). 원본 기본 0
         p('lost_stop_s', 20.0)             # 차선을 이만큼 계속 못 찾으면 정지 (원본에 없음, 실차 안전). 0 = 안 멈춤
+        # 아커만 (제자리 회전 없음) 용 — 기본은 예전 동작. 2D 시뮬 11-09 e1: M8 뒤 코너 안에서 차선을 잃고 직진 폴백으로
+        # 20 s (4 m) 직진해 트랙 밖
+        p('lost_hold_mode', 'decay')       # decay = 원본 (직전 조향이 3 s 시정수로 직진 쪽으로) | hold = 직전 조향 그대로 유지 (코너 계속 돎)
+        p('lost_stop_m', 0.0)              # 차선을 잃은 뒤 이 거리 [m] (명령 속도 적분) 를 가면 정지. 0 = 끔 (lost_stop_s 만)
         p('image_timeout_s', 0.5)          # 영상이 이만큼 안 오면 정지
         p('lane_cmd_topic', '/mission/lane_cmd')
         p('state_topic', '/lane/state')
@@ -142,6 +146,8 @@ class LaneFollower(Node):
         self.create_timer(0.05, self.watchdog)
         self._last_img = self._last_found = None
         self._steer_hold = None            # 소실 폴백용 직전 조향 EMA (PID 출력 단위)
+        self._lost_m = 0.0                 # 차선을 잃은 뒤 간 거리 (명령 속도 적분) [m]
+        self._lost_logged = False
         self._last_t = None
         self._last_cmd = Twist()
         self._last_dbg = 0.0
@@ -161,6 +167,7 @@ class LaneFollower(Node):
             self.det.reset(center_hint=0.5)    # 미션이 차를 차로 가운데쯤에 두고 넘김 (M7 변경 끝·M8 통로 끝)
             self.pid.reset()
             self._steer_hold = None
+            self._lost_m, self._lost_logged = 0.0, False   # 미션 중 (내 명령이 안 쓰일 때) 쌓인 소실 거리는 버림
             self.get_logger().info('슬라이딩 윈도우 리셋 (mission_manager 지시)')
         self._reset_prev = bool(msg.reset_window)
         self._cap_stamp = self.clock_s()
@@ -244,17 +251,26 @@ class LaneFollower(Node):
     def control(self, r, dt, now):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         cmd = Twist()
+        lost_far = g('lost_stop_m') > 0 and self._lost_m >= g('lost_stop_m')
         if r.found:
             self._last_found = now
+            self._lost_m, self._lost_logged = 0.0, False
             u = self.pid.update(r.offset + g('curve_steer_bias') * r.curvature, dt)
             hold = max(-0.30, min(0.30, u))   # 원본: 소실 폴백 EMA 는 과도 스파이크 완화를 위해 ±0.30 클램프
             self._steer_hold = hold if self._steer_hold is None else 0.3 * hold + 0.7 * self._steer_hold
             cmd.linear.x = float(max(g('slow_speed'), g('linear_speed') * (1.0 - g('curve_slow') * abs(r.curvature))))
-        elif (self._steer_hold is not None and self._last_found is not None
+        elif (self._steer_hold is not None and self._last_found is not None and not lost_far
               and (g('lost_stop_s') <= 0 or now - self._last_found < g('lost_stop_s'))):
-            self._steer_hold += (0.0 - self._steer_hold) * min(1.0, dt / 3.0)   # 원본: 3 s 시정수로 직진 쪽으로
+            if g('lost_hold_mode') != 'hold':
+                self._steer_hold += (0.0 - self._steer_hold) * min(1.0, dt / 3.0)   # 원본: 3 s 시정수로 직진 쪽으로
             u = self._steer_hold
             cmd.linear.x = float(g('slow_speed'))
+        elif lost_far:
+            u = 0.0
+            self.pid.reset()
+            if not self._lost_logged:
+                self._lost_logged = True
+                self.get_logger().warn(f'차선을 잃은 뒤 {self._lost_m:.2f} m 감 (lost_stop_m {g("lost_stop_m"):.2f}) — 정지, 차선이 다시 보이면 출발')
         else:
             u = 0.0
             self.pid.reset()
@@ -270,6 +286,8 @@ class LaneFollower(Node):
         # offset + = 차선 중심이 오른쪽 → 오른쪽으로 (각속도 −). 원본 steer_scale −1 과 같은 규약
         w = -g('angular_scale') * u * cmd.linear.x / max(1e-3, g('linear_speed'))
         cmd.angular.z = float(np.clip(w, -g('max_angular'), g('max_angular')))
+        if not r.found:
+            self._lost_m += abs(cmd.linear.x) * dt
         if not g('enable') or (g('wait_mission') and self._cap_stamp is None):
             if g('enable') and not self._waiting_logged:
                 self._waiting_logged = True
