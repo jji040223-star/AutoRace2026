@@ -209,6 +209,8 @@ class MissionManager(Node):
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
         p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
         p('m8_ack_assist_axis_deg', 12.0)  #   트랙 축 (주차 직선 방향) 에서 이 안이면 보조 끝
+        p('m8_ack_assist_pair_deg', 30.0)  #   차선 쌍으로 일찍 끝내는 건 트랙 축과 이 각 안일 때만 (g27·r10 +73° 에서 넘겨 바깥선 이탈)
+        p('m8_ack_exit_no_left', True)     # 아커만 출구선 맞추기: 출구 방향보다 왼쪽으로 안 넘김 (뒤가 오른쪽 모퉁이)
         p('m8_ack_assist_s', 6.0)          #   길어야 이만큼 (반경 0.47 로 90° = 0.74 m, 0.15 m/s 면 4.9 s — 3 s 면 늘 시간으로 끝났음, 다른 세션)
         p('m8_ack_exit_deg', 15.0)         # 아커만 M8 출구: 방향이 이 안이면 (옆 오차 무시) 바로 차선 추종에 넘김
         p('m8_ack_exit_s', 1.0)            #   길어야 이만큼
@@ -2252,9 +2254,14 @@ class MissionManager(Node):
                     ax_err = wrap(self._yaw - wrap(self._yaw0 + self._yaw_drift))
                     aligned = abs(ax_err) < math.radians(g('m8_ack_assist_axis_deg'))
                     how = f'트랙 축과 {math.degrees(ax_err):+.0f}°'
+                    near_ax = abs(ax_err) < math.radians(g('m8_ack_assist_pair_deg'))
                 else:
                     aligned = turned >= math.radians(g('m8_ack_assist_deg'))
                     how = f'통로 방향에서 {math.degrees(turned):.0f}° 돎'
+                    near_ax = turned >= math.radians(g('m8_ack_assist_deg') - g('m8_ack_assist_pair_deg'))
+                # 차선 쌍이 보여도 아직 크게 덜 돌았으면 (트랙 축과 > 30°) 보조 계속 — 그 각에서 넘기면 최소 반경으로도 못 돎
+                # (2D 시뮬 11-10 g27·r10: 축과 +73° 에서 넘겨 바깥선 이탈. 반경 0.56 으로 75° 돌려면 옆 0.41 m 필요, 0.13 m 뿐 — 다른 세션)
+                pair = pair and near_ax
                 if pair or aligned or now - asst['t'] > g('m8_ack_assist_s'):
                     self.m8_finish(now, f'코너 보조 끝 ({"차선 쌍" if pair else "방향 맞음" if aligned else "시간"}, {how}, '
                                         f'{now - asst["t"]:.1f} s)')
@@ -2299,6 +2306,11 @@ class MissionManager(Node):
             v = g('m8_exit_speed') * 0.5
             kap = 2.0 * ay_ / max(1e-3, ax_ * ax_ + ay_ * ay_)
             kmax = 1.0 / g('ack_plan_radius_m')
+            if g('m8_ack_exit_no_left'):
+                # 출구 뒤는 늘 오른쪽 모퉁이 (시계 방향 트랙) — 출구선 옆 오차를 맞추려 왼쪽으로 출구 방향을 넘어가면 (15~25°)
+                # 오른쪽으로 돌기 시작이 늦어 모퉁이 바깥으로 밀림 (2D 시뮬 11-10 r1 113°·f23·f26: 시작 y 4.53~4.74, 다른 세션).
+                # 왼쪽 곡률은 남은 방향 오차만큼만 (출구 방향을 왼쪽으로 넘지 않게)
+                kap = min(kap, max(0.0, herr) / max(0.1, g('m8_exit_look_m')))
             w = v * max(-kmax, min(kmax, kap))
         self.m8_mode('exit', f'통로 출구선 맞추는 중: 방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm')
         self.m7_publish(v, w)
