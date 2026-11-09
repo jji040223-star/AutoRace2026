@@ -1508,10 +1508,20 @@ class MissionManager(Node):
             k = self.m7_k(m['n'])
             opts = [j for j in ((2 * kh - k) if k != kh else None, kh - 1, kh + 1, kh)
                     if j is not None and 0 <= j < g('m7_lanes') and j != k]
+            # 앞이 많이 빈 차로 먼저 — 바로 앞이 막힌 차로를 고르면 거기서 또 막혀 멈춤 (2D 시뮬 11-09 x5_3: 0.3 m 앞이 막힌 차로 2 로 재시도, 다른 세션)
+            W_ = g('m7_lane_width_m')
+            half_ = W_ / 2 - g('m7_lane_margin_m')
+            sf_ = sc + CAR_HALF_L
+            bx_ = [self.m7_box(ob) for ob in self._obs]
+            def free_ahead(j):
+                lj = self.m7_lane_l(j)
+                d_ = [b[0] - sf_ for b in bx_ if b[3] > lj - half_ and b[2] < lj + half_ and b[1] > sc]
+                return min(min(d_) if d_ else 9.0, 9.0)
             side = self.m2_side()
+            far = None
             if side is not None and g('m7_avoid_far_side'):
                 far = g('m7_lanes') - 1 - (0 if side == 'A' else g('m7_lanes') - 1)
-                opts.sort(key=lambda j: j == far)        # 반대쪽 끝 차로는 마지막 후보로
+            opts.sort(key=lambda j: (j == far, free_ahead(j) < g('m7_block_m'), -round(free_ahead(j), 1)))   # 반대쪽 끝 차로는 마지막, 앞 막힌 차로는 뒤로
             if opts:
                 m['failed'] = (k, sc)            # 이 차로는 이 자리 근처에서 다시 고르지 않음
                 m['opposite'] = True
