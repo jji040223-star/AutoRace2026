@@ -227,6 +227,8 @@ class MissionManager(Node):
         p('m7_avoid_far_side', True)      # M2: 표지판 반대쪽 끝 차로 (A 면 2, B 면 0) 는 다른 후보가 없을 때만
         p('m7_ack_back_limit_m', 0.5)      # 아커만 후진: 지금까지 간 가장 먼 s 보다 이만큼 넘게 뒤로는 안 감 (c9 트랙 밖까지 후진)
         p('m7_ack_retry_progress_m', 0.2)  # 아커만: 가장 먼 s 가 이만큼 안 늘었으면 같은 자리 재시도로 셈
+        p('m7_ack_entry_cam', True)        # 아커만 M7 격자: 진입 보정 표본이 없으면 카메라 차선 쌍의 차로 가운데로
+        p('m7_ack_entry_cam_max_m', 0.35)
         p('m7_ack_back_lidar_free_m', 0.25) # 아커만 후진: 뒤 라이다가 이만큼 비었으면 뒤 기억 장애물은 무시
         p('m7_ack_final_after_lock_m', 0.2)  # 잠금 뒤 옮기기는 잠금 자리에서 이만큼 안에서 시작할 때만 — 늦게 시작하면 분리대 코를 밟음
                                            # (2D 시뮬 11-09 c8: s 5.32 에서 시작해 분리대 위 (4.02, 0.73) 로 지나감)
@@ -428,6 +430,7 @@ class MissionManager(Node):
                      'dirs': collections.deque(maxlen=60), 'seen_at': None}   # M7 없이 M2 (m2_without_m7)
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
         self._bar_pt = None                               # M7 전에 본 3차선 입구 흰 가로선 (odom)
+        self._last_pair = None                            # 마지막 차선 쌍 프레임 (시각, 차로 가운데 옆 거리, 차선 방향) — 아커만 M7 격자
         self._ys = collections.deque(maxlen=12)          # 최근 (차선 찾음, yellow_side) — 잠금 뒤 차로 옮기기 전 확인
         self._entry_ctr = collections.deque(maxlen=60)   # 위 점 중 곧고 두 선이 평행한 장면만 (3차선 입구 앞 1차로) — M7 격자 기준
         self._line_ctr = collections.deque(maxlen=40)    # 위 점 중 흰 가로선 (3차선 입구 선) 이 보일 때 잰 것만 — M7 격자 기준
@@ -637,6 +640,8 @@ class MissionManager(Node):
 
     def on_lane_state(self, msg):
         self._ys.append((bool(msg.found), int(msg.yellow_side)))
+        if msg.found and msg.yellow_side == 2:
+            self._last_pair = (self.get_clock().now().nanoseconds * 1e-9, float(msg.center_offset_m), float(msg.lane_heading_rad))
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self._lane = msg
         if msg.yellow_side != 0 and 0.0 < msg.line_resid_px < g('m6_resid_off'):
@@ -1058,6 +1063,21 @@ class MissionManager(Node):
                         how += f', 진입 전 1차로 가운데 {med * 100:+.1f} cm — 너무 커서 안 씀'
                 else:
                     how += f', 진입 전 1차로 가운데 점 {len(ls)} 개 — 부족해 안 맞춤'
+            if ctr == 0.0 and self.ack() and g('m7_ack_entry_cam'):
+                # 아커만: 코너를 크게 돌아 나와 차로 오른쪽 (+0.26 m) 에 +20° 틀어진 채 M7 이 켜지고, 위 보정 표본 (곧고 평행한 장면) 이
+                # 하나도 안 모임 → '차 = 가운데 차로 가운데' 로 고정하면 격자가 통째로 밀려 차로 2 목표가 바깥선 위 (2D 시뮬 11-09
+                # y7·y8·y9 (7.3, 1.7) 반복 이탈·멈춤, 다른 세션 분석). 최근 0.5 s 안 차선 쌍 프레임의 차로 가운데 옆 거리로 맞춤
+                lp = self._last_pair
+                now_ = self.get_clock().now().nanoseconds * 1e-9
+                if lp is not None and now_ - lp[0] <= 0.5:
+                    c_ = lp[1] * math.cos(lp[2])
+                    if abs(c_) <= g('m7_ack_entry_cam_max_m'):
+                        ctr = c_
+                        how += f', 카메라 차선 가운데 {c_ * 100:+.1f} cm 로 맞춤 (아커만, {now_ - lp[0]:.2f} s 전 쌍 프레임)'
+                    else:
+                        how += f', 카메라 차선 가운데 {c_ * 100:+.1f} cm — 너무 커서 안 씀'
+                else:
+                    how += ', 카메라 차선 쌍 프레임 없음 (0.5 s 안)'
             self._m7['grid'] = {'phase': ctr + self._m7.get('line_corr', 0.0), 'n_left': int(g('m7_entry_lane')),
                                 'how': how, 'fixed': True}
             self.get_logger().info(f'[M7] 차로 격자 고정: {self._m7["grid"]["how"]}')

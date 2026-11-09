@@ -3,7 +3,7 @@
 cd ~/AutoRace2026/tools/simcmp
 C=$HOME/AutoRace2026/autorace_ws/src/autorace_bringup/config/sim_real_mode.yaml
 # ACK=1 이면 아커만 (시뮬 차 움직임 + 미션·주차 노드), G8=<cfg> 면 8 번 배치를 그 파일로 (보기 창이 붙는 자리)
-A=${ACK:+,$PWD/ackermann.yaml}
+A=${ACK:+,$PWD/${ACKF:-ackermann.yaml}}   # ACKF=ackermann_real.yaml 이면 실차 가정 (덜 꺾임·느린 서보)
 # 출발 위치: 기본 = 출발선부터 한 바퀴 전체 (11-09 사용자). START=start_m7.yaml 이면 횡단보도 앞
 ST=$PWD/${START:-start_full.yaml}
 P=${1:-o}
