@@ -61,7 +61,41 @@ def metrics(path):
     r['states'] = ' '.join(s for s in r['states'] if s in ('M3_STOP', 'M7_AVOID', 'M2_BRANCH', 'M4_PARKING', 'DONE'))
     for k in ('m7_t0', 'm7_t1'):
         r.pop(k)
+    r.update(branch_truth(path))
     return r
+
+
+def branch_truth(drive_log):
+    """실제로 들어간 갈림길 (참 위치 frames/path.csv): 분리대 구간 x 2.6~4.2 의 y 중앙값 < 0.69 → A, > 1.19 → B, 사이 → 분리대 위.
+    표지판은 eval.log 의 SIM2D_RESULT branch. odom 차로 격자가 틀어져도 바른 판정 (2D 시뮬 11-09 d8, 다른 세션 제안)."""
+    import os
+    d = os.path.dirname(drive_log)
+    out = {'branch_sign': None, 'branch_went': None, 'm2_ok': None}
+    try:
+        m = re.search(r'SIM2D_RESULT (.*)', open(os.path.join(d, 'eval.log'), errors='ignore').read())
+        if m:
+            out['branch_sign'] = json.loads(m.group(1)).get('branch')
+        if out['branch_sign'] is None:
+            m = re.search(r'갈림길 표지판 ([AB])', open(os.path.join(d, 'sim.log'), errors='ignore').read())
+            out['branch_sign'] = m.group(1) if m else None
+        ys = []
+        for line in open(os.path.join(d, 'frames', 'path.csv')):
+            f = line.strip().split(',')
+            try:
+                x, y = float(f[1]), float(f[2])
+            except (ValueError, IndexError):
+                continue
+            if 2.6 <= x <= 4.2 and 0.0 < y < 2.0:
+                ys.append(y)
+        if ys:
+            ys.sort()
+            ym = ys[len(ys) // 2]
+            out['branch_went'] = 'A' if ym < 0.69 else 'B' if ym > 1.19 else 'mid'
+            if out['branch_sign']:
+                out['m2_ok'] = out['branch_went'] == out['branch_sign']
+    except OSError:
+        pass
+    return out
 
 
 if __name__ == '__main__':
