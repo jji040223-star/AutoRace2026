@@ -10,12 +10,33 @@ ROS2 Humble, 실차와 같은 토픽 이름 (`/cmd_vel`, `/odom`, `/imu`, `/scan
 | 파일 | 내용 | 언제 쓰나 |
 |---|---|---|
 | `autorace_ws_B_20261102_미션포함.zip` (32 MB) | 아래 `전체통합` 전부 + 미션 시설물 USD (`LimoIsaacSIM/autorace_2026/data/mission`) + 정차 LIMO 모형이 참조하는 WeGo LIMO 모델 2 개 | **다른 PC 에서 미션까지 시뮬할 때 — 이것 하나면 된다** |
-| `autorace_ws_B_20261102_전체통합.zip` (17 MB) | `autorace_ws` 워크스페이스 소스 (7 패키지, 트랙 USD, YOLO 모델 2 개, 문서) | 이미 `~/LimoIsaacSIM` 이 있는 PC, 실차 LIMO 에 옮길 때 |
+| `autorace_ws_B_20261102_전체통합.zip` (17 MB) | `autorace_ws` 워크스페이스 소스 (7 패키지, 트랙 USD, YOLO 모델 3 개 (실차 신호등 포함, 11-06), 문서) | 이미 `~/LimoIsaacSIM` 이 있는 PC, 실차 LIMO 에 옮길 때 |
 | `README_AutoRace2026_LIMO.md` | 전체 정리 문서 (zip 안에도 같은 것) | |
 | `2024-11-20-17-28-06.zip` | 예전 업로드 (이번 작업과 무관) | |
+| [`yolo/`](yolo/) | YOLO 학습용 데이터셋 (신호등 `red sign`·`yellow sign`·`green sign`, 515 장) | 신호등 YOLO 모델 학습할 때 — 아래 **YOLO** 참고 |
 
 두 zip 의 `autorace_ws` 는 같은 소스 (2026-11-02, 로컬 git 커밋 `2094c4d`) 이고, git 기록 (`.git`) 은 들어 있지 않다.
 WeGo LIMO 모델은 WeGo-Robotics 배포물이므로 저장소를 공개하거나 팀 밖에 줄 때 주의.
+
+## YOLO
+
+YOLO 데이터셋은 [`yolo/`](yolo/) 폴더에 모았다. 자세한 설명은 **[yolo/README.md](yolo/README.md)** 를 보면 된다.
+
+| 데이터셋 | 클래스 | 이미지 | 형식 |
+|---|---|---|---|
+| [`yolo/traffic_light/`](yolo/traffic_light/) | `green sign` (0), `red sign` (1), `yellow sign` (2) | 515 (train 360 / valid 103 / test 52) | YOLOv8 (Roboflow 내보내기 구조) |
+
+- 정면 3구 신호등 몸체만 라벨링했다. 옆면 보행자 신호와 다른 표지판은 라벨링하지 않았다.
+- zip 이 100 MB 를 넘어서 3 조각 (`.part00`–`.part02`) 으로 나눠 올렸다. 합쳐서 풀면 된다:
+  ```bash
+  cd yolo/traffic_light && cat traffic_light_yolo.zip.part* > traffic_light_yolo.zip && unzip traffic_light_yolo.zip
+  ```
+
+**실차 신호등 모델 (2026-11-06)**: 위 데이터로 학습한 `traffic_light_real_yolov8n.pt` 를 넣었다.
+`drive.launch.py` 는 실차 (`use_sim_time:=false`) 에서 이 모델과 실차 설정 (`traffic_light_real.yaml`) 을 자동으로 쓴다. 시뮬은 그대로다.
+두 워크스페이스 zip 에도 반영했다.
+이미 워크스페이스가 있는 LIMO Pro 에는 `bash yolo/traffic_light/limo/install_real_light.sh` 한 줄로 넣는다.
+다른 모델로 바꿀 때는 `light_model:=경로.pt` 를 준다. → [yolo/README.md](yolo/README.md#실차-신호등-모델-갈아끼우기-limo-pro)
 
 ## 다른 PC 에서 실행
 
