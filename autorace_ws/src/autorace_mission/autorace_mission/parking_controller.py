@@ -904,7 +904,8 @@ class ParkingController(Node):
     def do_fix(self, now):
         d, _, _ = self.bay_frame()
         err = self.fix_to - d
-        if abs(err) < 0.005:
+        # 아커만은 최소 속도 0.05 라 멈출 때 지연 (속도 0.15 s + 명령 0.08 s) 으로 ~1 cm 더 감 → 5 mm 허용이면 왔다갔다 (다른 세션)
+        if abs(err) < (0.015 if self.ack() else 0.005):
             self.pub(0.0, 0.0)
             self.enter_len = math.dist(self.enter_from, self.pose[:2])
             self.set_state('CHECK', '앞뒤 보정 끝')
