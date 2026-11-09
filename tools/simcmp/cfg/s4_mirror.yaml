@@ -1,5 +1,5 @@
 sim2d:
   ros__parameters:
     cone_layout: curvy
-    seed: 14
+    seed: 24
     static_layout: mirror

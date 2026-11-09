@@ -1,0 +1,4 @@
+mission_manager:
+  ros__parameters:
+    skip_missions: ["M3", "M7", "M8"]
+    m1_require_m8: false

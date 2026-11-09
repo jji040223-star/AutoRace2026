@@ -156,6 +156,9 @@ class Sim2D(Node):
         p('cone_layout', 'default')
         p('traffic_light', True)
         p('light_s', [10.0, 10.0, 3.0])    # 빨강, 초록, 노랑 [s]
+        p('light_mode', 'cycle')           # cycle = light_s 대로 돌기 | wait_car = 차가 정지선 앞에 완전히 설 때까지 빨강, 선 뒤 초록 (계속)
+        p('light_stop_box', [2.70, 4.59, 3.25, 5.09])  # wait_car: 차 가운데가 이 사각형 [x0, y0, x1, y1] 안 = 신호등 앞 횡단보도 정지선 (x 3.20) 앞 (x 2.30 서행 구간 정지선은 아님)
+        p('light_green_after_s', 4.0)      # wait_car: 그 안에서 멈춘 뒤 이만큼 지나면 초록
         p('branch_sign', 'random')         # A | B | random (리셋마다)
         p('seed', 0)
         p('fake_detections', True)         # YOLO 대신: 보이는 표지판·신호등 박스를 /perception/detections, /perception/traffic_light_detections 로
@@ -285,6 +288,7 @@ class Sim2D(Node):
         self.oyaw = math.radians(self.g('odom_yaw0_deg'))   # 실차처럼 오도메트리 0° 가 트랙과 틀어져 있을 때 흉내
         self.imu_yaw = 0.0
         self.light_t0 = self.sim_t
+        self._light_green, self._light_wait = False, None
         self.branch = self.rng.choice('AB') if g('branch_sign') == 'random' else str(g('branch_sign')).upper()
         self.boxes = []
         limo = dict(hl=0.161, hw=0.109, z0=0.0, z1=0.252, color=(0x22, 0x22, 0x24))
@@ -349,6 +353,8 @@ class Sim2D(Node):
             b.x, b.y = hx + k * st[0], hy + k * st[1]
 
     def light_color(self):
+        if self.g('light_mode') == 'wait_car':
+            return 'green' if getattr(self, '_light_green', False) else 'red'
         r, gr, ye = self.g('light_s')
         t = (self.sim_t - self.light_t0) % max(1e-3, r + gr + ye)
         return 'red' if t < r else ('green' if t < r + gr else 'yellow')
@@ -602,6 +608,18 @@ class Sim2D(Node):
         self.true_w = body_w
         self.imu_yaw = wrap(self.imu_yaw + body_w * dt)
         self.track_stats(dt)
+        if g('light_mode') == 'wait_car' and not self._light_green:
+            x0, y0, x1, y1 = g('light_stop_box')
+            if x0 <= self.x <= x1 and y0 <= self.y <= y1 and abs(self.v) < 0.01:
+                if self._light_wait is None:
+                    self._light_wait = self.sim_t
+                    self.get_logger().info(f'[sim2d] 신호등: 차가 정지선 앞에 섬 ({self.x:.2f}, {self.y:.2f}) — '
+                                           f'{g("light_green_after_s"):.0f} s 뒤 초록')
+                elif self.sim_t - self._light_wait >= g('light_green_after_s'):
+                    self._light_green = True
+                    self.get_logger().info('[sim2d] 신호등: 초록으로 바뀜')
+            else:
+                self._light_wait = None
         self.pub_clock.publish(Clock(clock=stamp(self.sim_t)))
         st = stamp(self.sim_t)
         for key, hz, fn in (('odom', g('odom_hz'), self.publish_odom), ('imu', g('imu_hz'), self.publish_imu),

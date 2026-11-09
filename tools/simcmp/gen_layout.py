@@ -2,6 +2,7 @@
 지나갈 길 보장: 들어가는 가운데 차로 (1) 에서 시작해, 앞 줄에서 어느 빈 차로를 골랐어도 다음 줄 빈 차로까지 한 칸 안.
 차로를 옮겨야 하는 줄 사이는 0.9 m 이상 (기본 배치와 같음), 같은 차로로 곧게 가면 0.75 m 이상.
 마지막 줄은 x 5.15 보다 앞 (갈림길 A·B 입구를 안 막음), 마지막 줄 가운데 차로는 비움 (갈림길 표지판 앞).
+한 차로에 최대 MAX_PER_LANE (3) 대 (11-09 사용자).
 사용: python3 gen_layout.py <출력 yaml>   → 고른 배치를 한 줄로 찍음"""
 import random
 import sys
@@ -10,6 +11,7 @@ LANES = [0.42, 0.94, 1.46]                # 차로 0 (왼쪽) · 1 · 2 의 y (�
 r = random.Random()
 
 
+MAX_PER_LANE = 3     # 한 차로 (0·1·2) 에 놓는 LIMO 최대 수
 LAST_X = 5.15        # 마지막 줄은 이보다 앞 (기본 배치와 같음) — 분리대 (x 4.28) 앞 갈림길 A·B 입구를 막지 않게
 
 
@@ -17,6 +19,8 @@ def make():
     counts = [2, 2, 1, 2]
     r.shuffle(counts)
     rows = [r.sample(range(3), c) for c in counts]
+    if any(sum(i in occ for occ in rows) > MAX_PER_LANE for i in range(3)):
+        return None          # 한 차로에 너무 많음
     if 1 in rows[-1]:
         return None          # 마지막 줄 가운데 차로 = 갈림길 표지판 (x 4.2, 가운데) 바로 앞 → 막지 않음
     # 갈 수 있는 차로 집합을 앞 줄부터 따라감 (한 줄 지날 때 한 칸까지 옮김)

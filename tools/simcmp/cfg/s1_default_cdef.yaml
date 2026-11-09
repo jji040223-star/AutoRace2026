@@ -1,0 +1,4 @@
+sim2d:
+  ros__parameters:
+    cone_layout: default
+    seed: 21

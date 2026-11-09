@@ -1,0 +1,7 @@
+# 신호등 (M1) 시험: 신호등 앞 직선 (x 1.0) 에서 출발 → 서행 구간 정지선 (x 2.30) 지나 횡단보도 정지선 (x 3.20) 에 서야 함
+sim2d:
+  ros__parameters:
+    start_x: 1.0
+    start_y: 4.84
+    start_yaw_deg: 0.0
+    light_mode: wait_car

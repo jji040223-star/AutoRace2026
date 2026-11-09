@@ -1,0 +1,5 @@
+sim2d:
+  ros__parameters:
+    cone_layout: default
+    seed: 23
+    static_layout: mirror
