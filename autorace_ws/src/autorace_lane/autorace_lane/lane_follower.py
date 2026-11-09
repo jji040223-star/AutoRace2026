@@ -123,6 +123,9 @@ class LaneFollower(Node):
                                            # w ∝ v 라 곡률은 그대로 — 빠를수록 덜 도는 차 (understeer) 의 실제 반경만 줄임
                                            # (2D 시뮬 11-10 c2 real2: 오른쪽 실효 반경 0.75 > 코너 0.6 → 이탈. 실차 측정 7 보고 정함)
         p('ack_corner_curv', 0.3)          #   코너로 보는 |curvature| (가까운 → 먼 밴드 흐름, 정규화)
+        p('reset_right_hint', 0.75)        # lane_cmd follow == 'both_right' 로 리셋할 때 차로 중심 힌트 (화면 폭 대비, 보통 리셋은 0.5).
+                                           # M8 코너 보조 끝: 차가 덜 돈 채 바깥선을 비스듬히 보면 그 단선을 오른쪽 경계로 오판해
+                                           # 출발 차로를 따라감 (2D 시뮬 11-10 w22·w29) → 중심이 오른쪽이라고 알려 왼쪽 경계로 해석
         p('image_timeout_s', 0.5)          # 영상이 이만큼 안 오면 정지
         p('lane_cmd_topic', '/mission/lane_cmd')
         p('state_topic', '/lane/state')
@@ -166,14 +169,16 @@ class LaneFollower(Node):
         self._cap_target = float(msg.max_speed) if msg.max_speed > 0 else None
         self._stop = bool(msg.stop)
         if self.det is not None:
-            self.det.follow = msg.follow if msg.follow in ('left', 'right') else 'both'   # M2 갈림길: 한쪽 선만
+            self.det.follow = msg.follow if msg.follow in ('left', 'right') else 'both'   # M2 갈림길: 한쪽 선만 ('both_right' 도 동작은 both)
         if msg.reset_window and not self._reset_prev and self.det is not None:
             # 차선을 떠났다 돌아올 때 (M7 회피 뒤 등): 직전 피팅·중심을 버리고 새로 찾는다 (v3: 윈도우 리셋)
-            self.det.reset(center_hint=0.5)    # 미션이 차를 차로 가운데쯤에 두고 넘김 (M7 변경 끝·M8 통로 끝)
+            # 미션이 차를 차로 가운데쯤에 두고 넘김 (M7 변경 끝) → 0.5. 'both_right' (M8 코너 보조 끝) → 차로가 오른쪽
+            hint = float(self.get_parameter('reset_right_hint').value) if msg.follow == 'both_right' else 0.5
+            self.det.reset(center_hint=hint)
             self.pid.reset()
             self._steer_hold = None
             self._lost_m, self._lost_logged = 0.0, False   # 미션 중 (내 명령이 안 쓰일 때) 쌓인 소실 거리는 버림
-            self.get_logger().info('슬라이딩 윈도우 리셋 (mission_manager 지시)')
+            self.get_logger().info(f'슬라이딩 윈도우 리셋 (mission_manager 지시, 중심 힌트 {hint:.2f})')
         self._reset_prev = bool(msg.reset_window)
         self._cap_stamp = self.clock_s()
 
