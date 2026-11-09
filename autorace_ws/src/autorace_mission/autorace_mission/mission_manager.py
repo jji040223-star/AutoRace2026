@@ -198,6 +198,10 @@ class MissionManager(Node):
         p('m8_ack_arcs', False)            # 아커만 M8: 원호 후보로 고르기 (2D 시뮬 11-09 j: 매 순간 0.35 m 만 봐서 휜 통로 앞에서 막혀
                                            # 후진 8~17 번 → 끔, 예전 틈 가운데 추종 + 조향 후진·출구 추종만)
         p('m8_ack_arc_m', 0.35)            # 아커만 M8: 원호 검사 길이
+        p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
+        p('m7_ack_ref_max_a_m', 1.2)       #   꺾기 시작을 이만큼 뒤까지 찾음
+        p('m7_ack_ref_cross_funnel', True) #   깔때기 벽을 지켜선 S 자가 안 들어가면 깔때기 벽만 빼고 다시 찾음
+        p('m7_ack_w_ref_head', 0.4)        #   기준 방향과의 차 벌점 [1/rad]
         p('m7_ack_n', 11)                  #   곡률 후보 수 (−1/R ~ +1/R)
         p('m7_ack_w_lat', 2.0)             #   비용: 끝 자리 옆 오차 [1/m]
         p('m7_ack_w_head', 0.15)           #   비용: 끝 방향 오차 [1/rad] (옆 오차는 펴는 거리까지 투영해서 봄 → 작게)
@@ -1178,7 +1182,37 @@ class MissionManager(Node):
                 D.append(dist)
         return np.array(P), np.array(D)
 
-    def m7_ack_step(self, sc, lc, psi, lt, k, near, changing):
+    def m7_ack_ref(self, sc, lc, psi, lt, boxes, mg):
+        """기준 S 자: 지금 자세에서 곧게 a 만큼 → 목표 쪽 원호 (반경 R) → 반대 원호로 방향 0 → 0.3 m 곧게, 끝 옆 = lt.
+        a 를 0 부터 0.05 씩 늘려 안 닿는 가장 이른 것 (다른 세션 설계 11-09: 끼는 이유는 결정보다 '꺾기 시작' 이 늦어서 —
+        지평선 0.95 m 비용만으로는 S 자 끝을 못 봐서 이른 시작을 안 고름). 지금 방향이 이미 목표 쪽이면 그대로 씀. 없으면 None."""
+        g = lambda k_: self.get_parameter(k_).value   # noqa: E731
+        R = g('ack_plan_radius_m')
+        for a in np.arange(0.0, g('m7_ack_ref_max_a_m') + 1e-9, 0.05):
+            l0 = lc + a * math.sin(psi)
+            dl = lt - l0
+            if abs(dl) < 0.02:
+                segs = [(0.0, a), (0.0, 0.3)] if abs(psi) < 0.05 else None
+                if segs is None:
+                    continue
+            else:
+                d = 1.0 if dl > 0 else -1.0
+                c = (math.cos(psi) + 1.0 - abs(dl) / R) / 2.0
+                if not -1.0 <= c <= 1.0:
+                    continue
+                th = d * math.acos(c)
+                l1 = R * abs(wrap(th - psi))
+                l2 = R * abs(th)
+                if d * (th - psi) < -1e-6:
+                    continue                # 이미 목표 쪽으로 더 틀어짐 — 첫 원호가 반대로 돌아야 함 (이 모양 아님)
+                segs = [(0.0, a), (d / R, l1), (-d / R, l2), (0.0, 0.3)]
+            P, D = self.ack_poses(sc, lc, psi, [sg for sg in segs if sg[1] > 1e-6])
+            if boxes and avoid.hits(P, boxes, mg).any():
+                continue
+            return P, a
+        return None
+
+    def m7_ack_step(self, sc, lc, psi, lt, k, near, changing, funnel=()):
         """아커만 M7 한 번: 곡률 후보 (κ1, κ2) 마다 첫 원호 d1 → 둘째 원호 d2 를 굴려 보고 (매 순간 다시 계획 — 조향 지연은
         ack_plan_radius_m 여유로), 첫 원호가 안 닿는 것 중 비용 (끝 옆 오차·방향 오차·둘째 원호에서 막히는 길이) 이 가장 작은 것.
         돌려줌: v, w (= v·κ1), 막힘 여부, 막힘 로그."""
@@ -1189,6 +1223,30 @@ class MissionManager(Node):
         boxes = avoid.escape((sc, lc, psi), list(near)) or []   # 이미 닿은 상자 (기억 오차) 는 빼고 — 빠져나가는 길도 고르게
         mg = np.full(len(boxes), g('m7_margin_m'))
         pmax = math.radians(g('m7_ack_max_psi_deg'))
+        ref = None
+        if changing and g('m7_ack_ref'):
+            m = self._m7
+            key = (k, round(sc / 0.1))
+            if m.get('ack_ref_key') != key:
+                m['ack_ref_key'] = key
+                m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, boxes, mg)
+                cross = False
+                if m['ack_ref'] is None and funnel and g('m7_ack_ref_cross_funnel'):
+                    # 깔때기 노란 선을 지키면 S 자가 안 들어감 (트랙: 깔때기 끝 x 8.05 → 첫 줄 x 7.85 = 0.2 m, 아커만 S 자 0.84~0.9 m) →
+                    # 깔때기 벽만 빼고 (장애물·바깥 벽은 그대로) 다시. 선을 조금 넘을 수 있음 (차로 이탈 −1 위험 < 끼어서 M7 못 끝냄)
+                    fs = set(funnel)
+                    b2 = [b for b in boxes if b not in fs]
+                    m['ack_ref'] = self.m7_ack_ref(sc, lc, psi, lt, b2, np.full(len(b2), g('m7_margin_m')))
+                    cross = m['ack_ref'] is not None
+                r_ = m['ack_ref']
+                self.m7_mode(f'ref{k}{r_ is None}{cross}', f'기준 S 자 → 차로 {k}: ' + ('안 들어감 (반응형만)' if r_ is None else
+                                                  f'곧게 {r_[1]:.2f} m 뒤 꺾기 시작' + (' (깔때기 선 무시)' if cross else '')))
+                m['ack_ref_cross'] = cross
+            ref = m.get('ack_ref')
+            if ref is not None and m.get('ack_ref_cross') and funnel:
+                fs = set(funnel)              # 기준이 깔때기 선을 넘기로 했으면 후보 검사도 깔때기 벽 없이 (아니면 기준을 못 따라감)
+                boxes = [b for b in boxes if b not in fs]
+                mg = np.full(len(boxes), g('m7_margin_m'))
         best = None
         free1 = []
         for k1 in K:
@@ -1206,7 +1264,16 @@ class MissionManager(Node):
                 # (방향이 클 수밖에 없음) 를 늘 손해로 봐서 '안 꺾는 쪽' 이 이김 (2D 시뮬 11-09 i1: +15° 로 들어와 왼쪽 차로로 가야 하는데
                 # 방향만 펴다 첫 줄 LIMO 에 비스듬히 끼임, 다른 세션 검토)
                 lp = le + math.copysign(g('ack_plan_radius_m') * (1.0 - math.cos(pe)), pe)
-                cost = (g('m7_ack_w_lat') * abs(lp - lt) + g('m7_ack_w_head') * abs(pe)
+                if ref is not None:
+                    # 기준 S 자 위 같은 s 의 옆·방향을 목표로 (기준이 '아직 안 꺾을 때' 와 '지금 꺾을 때' 를 정함)
+                    RP = ref[0]
+                    i_ = int(np.argmin(np.abs(RP[:, 0] - se)))
+                    lr, pr = (RP[i_, 1], RP[i_, 2]) if se <= RP[-1, 0] else (lt, 0.0)
+                    lpr = le + math.copysign(g('ack_plan_radius_m') * (1.0 - math.cos(pe - pr)), pe - pr)
+                    cost_lat = g('m7_ack_w_lat') * abs(lpr - lr) + g('m7_ack_w_ref_head') * abs(pe - pr)
+                else:
+                    cost_lat = g('m7_ack_w_lat') * abs(lp - lt)
+                cost = (cost_lat + g('m7_ack_w_head') * abs(pe)
                         + g('m7_ack_w_free') * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
                 if best is None or cost < best[0]:
                     best = (cost, k1, k2, fl)
@@ -1426,6 +1493,7 @@ class MissionManager(Node):
             boxes = [b for b in boxes if inside(b)]
             near = [b for b in near if inside(b)]
         walls = []
+        funnel = []                          # 입구 1차로·깔때기 가상 벽 (아커만 기준 S 자가 안 들어가면 이것만 빼고 다시 찾음)
         behind = []                          # 입구 벽 중 차 중심보다 완전히 뒤 조각 — 제자리 회전 검사에선 뺀다
         if g('m7_outer_wall'):
             # 세 차로 바깥 (노란 선 밖) 을 벽으로 — 쓸기 검사에서 노란 선 밖으로 나가는 방향을 막는다 (실차 11-06 full13: 노란 선 위로
@@ -1463,6 +1531,7 @@ class MissionManager(Node):
                     k += 1
                 near = near + ew
                 walls = walls + ew
+                funnel = ew
                 # 차 중심보다 완전히 뒤에 있는 깔때기 조각은 제자리 회전 검사에서 뺀다 — 목표 차로 가운데까지 간 뒤 뒷모서리가
                 # 지나온 깔때기 벽에 걸려 어느 쪽으로도 못 돌고 후진 (2D 시뮬 11-09 q2·q3: s 1.07 에서 '회전 막힘' 전 방향)
                 behind = [b for b in ew if b[1] < sc]
@@ -1650,7 +1719,7 @@ class MissionManager(Node):
         blk_msg = None
         if self.ack():
             # 4a) 아커만: 원호 두 개 (첫 원호 → 둘째 원호) 후보 중 안 닿고 목표 차로 가운데·차로 방향에 가장 가까워지는 것
-            v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing)
+            v, w, blocked, blk_msg = self.m7_ack_step(sc, lc, psi, lt, k, near, changing, funnel)
         else:
             # 4) 방향·속도: 바라는 방향 (pure pursuit) 에 가까운 후보 중 쓸기 검사로 m7_go_free_m 이상 갈 수 있는 것.
             #    없으면 제자리 회전 (v = 0) 으로 더 멀리 갈 수 있는 방향, 그것도 없으면 막힘
