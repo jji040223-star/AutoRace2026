@@ -195,6 +195,8 @@ class MissionManager(Node):
         p('ack_plan_radius_m', 0.52)       # 경로 계획에 쓰는 최소 반경 (조향 지연·오차 여유)
         p('m7_ack_d1_m', 0.25)             # 아커만 M7: 첫 원호 길이 (매 순간 다시 계획 — 이 원호의 곡률로 운전)
         p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
+        p('m8_ack_exit_deg', 15.0)         # 아커만 M8 출구: 방향이 이 안이면 (옆 오차 무시) 바로 차선 추종에 넘김
+        p('m8_ack_exit_s', 1.0)            #   길어야 이만큼
         p('m8_ack_arcs', False)            # 아커만 M8: 원호 후보로 고르기 (2D 시뮬 11-09 j: 매 순간 0.35 m 만 봐서 휜 통로 앞에서 막혀
                                            # 후진 8~17 번 → 끔, 예전 틈 가운데 추종 + 조향 후진·출구 추종만)
         p('m8_ack_arc_m', 0.35)            # 아커만 M8: 원호 검사 길이
@@ -2083,7 +2085,15 @@ class MissionManager(Node):
         ex = self._m8['exit']
         herr = wrap(ex['dir'] - self._yaw)
         (ax_, ay_), _, lat = self.m8_axis_aim(ex['mid'], ex['dir'], g('m8_exit_look_m'))
-        t_lim = g('m8_exit_s') * (2.0 if self.ack() else 1.0)   # 아커만은 앞으로 가며 맞추므로 더 걸림
+        if self.ack():
+            # 아커만: 맞추는 동안 계속 앞으로 가서 신호등 쪽 코너 (차로 가운데 반경 ~0.5 m ≈ 최소 반경) 안에 들어가 넘겨주면
+            # 차선 추종이 못 돎 (2D 시뮬 11-09 e1: 2.6 s 맞추고 코너 안쪽 0.31 m 에서 넘겨줘 트랙 밖, e4: 바깥선 이탈 — 다른 세션 진단).
+            # 오도메트리도 아커만 회전의 옆 미끄럼을 몰라 출구선 위치가 어긋남 → 방향만 맞으면 (옆 무시) 바로 넘김, 길어야 m8_ack_exit_s
+            if abs(herr) < math.radians(g('m8_ack_exit_deg')) or now - ex['t'] > g('m8_ack_exit_s'):
+                self.m8_finish(now, f'통로 출구 방향 맞음 (아커만 — 옆 무시, 방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm, '
+                                    f'{now - ex["t"]:.1f} s)')
+                return
+        t_lim = g('m8_exit_s')
         if (abs(herr) < math.radians(g('m8_exit_deg')) and abs(lat) < g('m8_exit_lat_m')) or now - ex['t'] > t_lim:
             self.m8_finish(now, f'통로 출구선에 맞춤 (방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm, {now - ex["t"]:.1f} s)')
             return
