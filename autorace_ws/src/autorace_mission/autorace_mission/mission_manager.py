@@ -224,6 +224,7 @@ class MissionManager(Node):
         p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
         p('m7_ack_gap_target', False)      # 아커만 M7: 목표 옆을 차로 가운데 대신 다음 줄 빈 구간 안 가장 가까운 점 (경계 지그재그 — 실차 반경 0.95 m,
                                            #   real_limo 에서만 켬. 시뮬 기본 꺼짐)
+        p('m7_ack_back_latch', False)      # 아커만 M7 후진: 시작 때 정한 조향을 후진 끝까지 유지 (좌우 왔다 갔다 방지). 실차 켬
         p('m7_ack_guard_back', False)      # 아커만 M7: mux 앞 안전 정지가 걸리면 바로 후진 (M8 m8_ack_guard_back 과 같음). 실차 켬
         p('m7_ack_idle_back_s', 0.0)       # 아커만 M7: 이 시간 동안 3 cm 도 안 움직이면 후진 (0 = 끔). 실차 4.0
         p('m7_ack_hold_target', False)     # 아커만 M7: 막힘·후진 뒤 다시 고를 때 목표 차로를 유지 (들어가거나 아래 번 실패까지) — 후진
@@ -1885,6 +1886,12 @@ class MissionManager(Node):
                     # 바깥 벽 사이에 끼어 후진 3 번 모두 실패) → 후진하면서 차로 방향 쪽으로 편다 (후진이라 w 부호 = 방향 줄이는 쪽)
                     vb = g('m7_back_speed')
                     w_b = max(-vb / g('ack_plan_radius_m'), min(vb / g('ack_plan_radius_m'), -2.0 * vb * psi / 0.3))
+                if self.ack() and g('m7_ack_back_latch'):
+                    # 후진 한 번 동안 조향 고정 — 매 틱 다시 정하면 3 점 회전 (한쪽 끝) ↔ 펴기 (반대쪽) 가 옆 차이 경계에서 번갈아
+                    # 바퀴가 좌우로 왔다 갔다 (실차 11-10 사용자)
+                    if 'w' not in bk:
+                        bk['w'] = w_b
+                    w_b = bk['w']
                 self.m7_publish(-g('m7_back_speed'), w_b)
                 return
             m['back'] = None
