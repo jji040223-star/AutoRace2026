@@ -245,6 +245,10 @@ class MissionManager(Node):
         p('m7_ack_island', True)           # 아커만: 갈림길 분리대 (가운데 차로 끝 쐐기 섬) 를 M7 벽으로 — 있으면 잠금 뒤 옮기기 거리 제한 없음
         p('m7_ack_island_nose_m', 4.30)    #   입구 흰 가로선 → 섬 코 (도면 4.39, 여유 0.09). 코에서 0.25 m 동안 45° 로 폭 0.5 까지
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
+        p('m7_ack_no_center_exit', True)  # 아커만: 가운데 차로 (분리대로 가는 차로) 에서는 '앞이 비었다' 로 끝내지 않음 — 목표 차로가
+                                           # 옆 장애물로 아직 막혀 있어도 m7_min_exit_m 에서 끝내 가운데로 남으면, 차선 추종은 노란 선만 보므로
+                                           # 흰 점선뿐인 가운데 차로에서 차선 0 % → 영원히 멈춤 (2D 시뮬 11-10 t39_gen). 계속 가다 옆이 비면
+                                           # 위 '마지막 옮기기' 로 목표 차로, 안 되면 m7_max_m 안전장치
         p('m7_failed_keep_m', 0.6)        # 같은 자리 실패 뒤 반대쪽 재시도: 실패한 곳 + 이 거리까지 그 차로를 다시 고르지 않음
         p('m7_lidar_trim', True)           # 라이다 가까운 기억 상자는 차를 향한 면을 라이다 점까지 줄임 (실차 11-06)
         p('m7_lidar_trim_reach_m', 1.2)    #   라이다에서 상자 가까운 면까지 이 안
@@ -2015,7 +2019,14 @@ class MissionManager(Node):
             return
         # 최소 구간: 2D 시뮬 11-09 r9 — 오른쪽 차로가 1~3 째 줄까지 비어 s 1.29 m 에서 '앞 1.0 m 빔' 으로 끝냄 → 차선 추종으로
         # 4 째 줄 (같은 차로 2.0 m 앞, 뎁스엔 보였음) 에 부딪힘. 마지막 줄은 s 3.5 m 안 → 3.0 m 부터는 그 줄이 m7_clear_m 안에 들어옴
-        if (not changing and a_own > g('m7_clear_m') and clear and sc > max(0.3, g('m7_min_exit_m'))) or sc > g('m7_max_m'):
+        center_wait = (self.ack() and g('m7_ack_no_center_exit') and goal is not None and 0 < k < g('m7_lanes') - 1
+                       and not m.get('final_shift'))
+        if (center_wait and not changing and a_own > g('m7_clear_m') and clear and sc > max(0.3, g('m7_min_exit_m'))
+                and not m.get('center_wait_logged')):
+            m['center_wait_logged'] = True
+            self.get_logger().info(f'[M7] 앞은 비었지만 가운데 차로 {k} — 안 끝내고 목표 차로 {goal} 옆이 빌 때까지 감 (s {sc:.2f} m)')
+        if (not changing and a_own > g('m7_clear_m') and clear and sc > max(0.3, g('m7_min_exit_m')) and not center_wait) \
+                or sc > g('m7_max_m'):
             self._reset_until = now + 0.5
             self._m7_hits = 0
             self.set_state('LANE', f'앞 {g("m7_clear_m")} m 비어 있음, 차로 변경 {m["changes"]} 번, 지금 차로 {k}, '
