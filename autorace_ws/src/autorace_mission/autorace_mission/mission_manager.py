@@ -205,6 +205,7 @@ class MissionManager(Node):
         p('m8_ack_bias_min_kappa', 0.8)    # 아커만 M8: 앞 문 3 개로 잰 곡률이 이보다 클 때만 휨 바깥쪽으로 치우침
         p('m8_ack_outer_bias_m', 0.02)     # (11-10 c2·q9: 0.04 → 0.02 — 20 판 콘 0·후진 0, 0.04 는 입구 cone_0 을 차 앞 모서리로 침·후진 9~10 번) 아커만 M8: 본 라바콘이 m8_ack_outer_bias_after 개 넘으면 (마지막 문들) 목표를 왼쪽으로 이만큼
         p('m8_ack_outer_bias_after', 10)
+        p('m8_ack_path_scale', 1.0)        # 아커만: 쌍 가운데점의 통로 축에서 옆 거리를 이 배로 (1.0 = 그대로). 실차 반경 0.95 → 0.7
         p('m8_ack_corner_assist', True)    # 아커만 M8 출구에서 차선 쌍이 안 보이면 최대 오른쪽으로 코너 보조
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
         p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
@@ -2423,6 +2424,19 @@ class MissionManager(Node):
                 aim, along, _ = self.m8_axis_aim(ax[0], ax[1], g('m8_aim_m'))
                 on_axis = along > -0.3 and aim[0] > 0.05
                 aim = aim if on_axis else None
+        kk = g('m8_ack_path_scale')
+        if aim is not None and not on_axis and self.ack() and kk < 1.0:
+            # 아커만 실차 (최대 곡률 1.05): 쌍 가운데선을 그대로 따라가면 공식 배치 (sway 0.12, 주기 1.8) 의 최소 반경 0.68 m 를 못 돎
+            # → 통로 축 (첫 쌍 가운데 + 차로 방향) 에서 목표점의 옆 거리를 kk 배로 줄여 완만하게 (0.7 배: 콘 여유 5~8 cm, 다른 세션 11-10 계산)
+            ax = self.m8_axis()
+            if ax is not None:
+                (ox, oy), hd = ax
+                c0, s0 = math.cos(self._yaw), math.sin(self._yaw)
+                wx, wy = self._pos[0] + aim[0] * c0 - aim[1] * s0, self._pos[1] + aim[0] * s0 + aim[1] * c0
+                lat = -(wx - ox) * math.sin(hd) + (wy - oy) * math.cos(hd)   # 축 왼쪽 +
+                wx, wy = wx + (kk - 1.0) * lat * -math.sin(hd), wy + (kk - 1.0) * lat * math.cos(hd)
+                dx, dy = wx - self._pos[0], wy - self._pos[1]
+                aim = (dx * c0 + dy * s0, -dx * s0 + dy * c0)
         gap = min((q[2] for q in gates if q[0] > 0.0), default=float('nan'))
         cands = []
         if aim is None:

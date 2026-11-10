@@ -34,9 +34,15 @@ mission_manager:
     ack_plan_radius_m: 1.0              # 경로 계획 반경 (시뮬 0.52) — 측정 최대에 여유
     ack_min_speed: 0.05                 # 실제로 움직이는 가장 작은 속도 + 0.01
     m7_ack_back_straighten: false       # 후진은 조향 0 (실차 11-10 사용자: 바퀴가 13° 까지만 꺾여 펴며 후진해도 그대로)
+    m7_back_m: 0.2                      # 후진 거리 0.2 m 로 통일 (사용자 11-10) — 시뮬은 0.15 에서 같은 자리 n 번째면 n 배
+    m7_back_grow: false                 #   늘리지 않음 (ack8·9: 0.45 m 까지 늘어 이전 구간까지 물러남)
+    m8_back_m: 0.2                      # M8 후진도 0.2 (시뮬 0.10)
+    m8_ack_path_scale: 0.7              # M8: 통로 축에서 옆 흔들림 0.7 배 — 공식 배치 가운데선 최소 반경 0.68 < 실차 0.95 (다른 세션 계산: 여유 5~8 cm)
 parking_controller:
   ros__parameters:
     ack_min_radius_m: 0.95              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
+    ack_park_margin_m: -0.09            # 꺾기 시작 = 칸 가운데 − (반경 + 이것) = 0.86 m 앞 — 반경 0.95 면 0.82~0.90 m 앞에서 최대 조향,
+                                        #   60~72° 에서 네 모서리 칸 안 (여유 8.6 cm, 이웃 LIMO 0.2 m — 다른 세션 park_geom.py 11-10). 시뮬 +0.08
     ack_min_speed: 0.05
     inside_margin_m: 0.04               # 칸 안 판정 여유 — 줄자 vs 로그 차이 2 cm 넘으면 0.06~0.08
 odom_imu:
