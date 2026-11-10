@@ -32,7 +32,10 @@ mission_manager:
     # 아커만 (11-10) — 실차 측정 전엔 시뮬 기본값. 실차검증_아커만.md 의 측정 1·5 결과로 바꿈 (주차 쪽과 같은 값)
     ack_min_radius_m: 0.95              # 최대 조향 원 반경 — 실차 11-10 측정 (곡률 최대 1.05, 좌우 같음). 시뮬 0.47
     ack_plan_radius_m: 1.0              # 경로 계획 반경 (시뮬 0.52) — 측정 최대에 여유
-    ack_min_speed: 0.05                 # 실제로 움직이는 가장 작은 속도 + 0.01
+    ack_min_speed: 0.10                 # 저속 명령 하한 — 실차 11-10 ack10: 0.08 m/s 로 정지에서 출발 못 함 (1.1 s 동안 0.2~0.6 cm) → 0.1 아래는 다 0.1 (사용자)
+    m3_min_speed: 0.10                  # 정지선 접근 최저 (시뮬 0.04)
+    m7_change_speed: 0.10               # M7 차로 바꾸는 동안 (시뮬 0.08)
+    m7_back_speed: 0.10                 # M7 후진 (시뮬 0.06)
     m7_ack_back_straighten: false       # 후진은 조향 0 (실차 11-10 사용자: 바퀴가 13° 까지만 꺾여 펴며 후진해도 그대로)
     m7_back_m: 0.2                      # 후진 거리 0.2 m 로 통일 (사용자 11-10) — 시뮬은 0.15 에서 같은 자리 n 번째면 n 배
     m7_back_grow: false                 #   늘리지 않음 (ack8·9: 0.45 m 까지 늘어 이전 구간까지 물러남)
@@ -44,7 +47,12 @@ parking_controller:
     ack_min_radius_m: 0.95              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
     ack_park_margin_m: -0.09            # 꺾기 시작 = 칸 가운데 − (반경 + 이것) = 0.86 m 앞 — 반경 0.95 면 0.82~0.90 m 앞에서 최대 조향,
                                         #   60~72° 에서 네 모서리 칸 안 (여유 8.6 cm, 이웃 LIMO 0.2 m — 다른 세션 park_geom.py 11-10). 시뮬 +0.08
-    ack_min_speed: 0.05
+    ack_min_speed: 0.10                 # 0.1 아래 명령은 다 0.1 (mission_manager 와 같게)
+    ack_arc_speed: 0.10                 # 원호 (시뮬 0.08)
+    align_speed: 0.10                   # (시뮬 0.06)
+    align_min_speed: 0.10               # (시뮬 0.04)
+    enter_min_speed: 0.10               # (시뮬 0.03)
+    exit_speed: 0.10                    # (시뮬 0.09)
     inside_margin_m: 0.04               # 칸 안 판정 여유 — 줄자 vs 로그 차이 2 cm 넘으면 0.06~0.08
 odom_imu:
   ros__parameters:
