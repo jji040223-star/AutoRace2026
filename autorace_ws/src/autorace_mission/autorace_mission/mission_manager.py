@@ -287,6 +287,7 @@ class MissionManager(Node):
         p('m7_blocked_s', 1.0)             # 갈 방향이 없으면 이 시간 뒤 차로 다시 고르기, 두 배 뒤 후진
         p('m7_back_m', 0.15)               # 후진 거리 (오도메트리)
         p('m7_back_speed', 0.06)
+        p('m7_ack_back_straighten', True)  # 아커만 후진 중 차로 방향 쪽으로 펴며 후진. False = 조향 0 으로 곧게 (실차 11-10: 조향이 13° 까지만 꺾여 펴는 효과 없음 — 사용자)
         p('m7_back_timeout_s', 4.0)        # m7_back_m 한 번 기준 (더 많이 물러날 때는 비례해서 늘림)
         p('m7_back_grow', True)            # 같은 자리 n 번째 막힘이면 m7_back_m × n 만큼 물러남
         p('m7_back_grow_max', 3)
@@ -1792,7 +1793,7 @@ class MissionManager(Node):
             if why is None:
                 self.m7_mode('back', '후진 중')
                 w_b = 0.0
-                if self.ack():
+                if self.ack() and g('m7_ack_back_straighten'):
                     # 아커만: 곧게 후진하면 방향이 그대로라 같은 자리에 다시 낀다 (2D 시뮬 11-09 c3: 14° 틀어진 채 첫 줄 LIMO 와
                     # 바깥 벽 사이에 끼어 후진 3 번 모두 실패) → 후진하면서 차로 방향 쪽으로 편다 (후진이라 w 부호 = 방향 줄이는 쪽)
                     vb = g('m7_back_speed')
