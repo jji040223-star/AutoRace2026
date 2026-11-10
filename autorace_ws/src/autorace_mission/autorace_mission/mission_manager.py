@@ -221,7 +221,7 @@ class MissionManager(Node):
         p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
         p('m7_ack_gap_target', False)      # 아커만 M7: 목표 옆을 차로 가운데 대신 다음 줄 빈 구간 안 가장 가까운 점 (경계 지그재그 — 실차 반경 0.95 m,
                                            #   real_limo 에서만 켬. 시뮬 기본 꺼짐)
-        p('m7_ack_gap_clear_m', 0.13)      #   빈 구간 = 상자 옆면에서 이만큼 안 (차 반폭 0.109 + 2 cm)
+        p('m7_ack_gap_clear_m', 0.13)      #   빈 구간 = 상자 옆면에서 이만큼 안. 실제로는 max(이것, 0.109 + m7_margin_m + 0.005)
         p('m7_ack_gap_horizon_m', 1.5)     #   이 거리 안 다음 줄만 봄
         p('m7_ack_ref_max_a_m', 1.2)       #   꺾기 시작을 이만큼 뒤까지 찾음
         p('m7_ack_ref_cross_funnel', True) #   깔때기 벽을 지켜선 S 자가 안 들어가면 깔때기 벽만 빼고 다시 찾음
@@ -1259,7 +1259,9 @@ class MissionManager(Node):
         목표로 하면 매 줄 막힘·후진 (실차 11-10 ack6~9) → 상자 폭이 좁으면 (≤ 0.28 m) 경계 근처로 거의 곧게 지나감.
         빈 구간이 차 폭보다 좁거나 차로 k 가운데에 상자가 걸치면 차로 가운데 그대로."""
         g = lambda k_: self.get_parameter(k_).value   # noqa: E731
-        W, cl, last = g('m7_lane_width_m'), g('m7_ack_gap_clear_m'), g('m7_lanes') - 1
+        W, last = g('m7_lane_width_m'), g('m7_lanes') - 1
+        # 쓸기 검사 (차 반폭 0.109 + m7_margin_m) 보다 가까운 목표면 그 자리가 늘 '닿음' 이라 계획이 못 따라감 → 그 이상으로
+        cl = max(g('m7_ack_gap_clear_m'), 0.109 + g('m7_margin_m') + 0.005)
         ahead = [b for b in boxes if b[0] > sc and b[0] < sc + g('m7_ack_gap_horizon_m')]
         if not ahead:
             return lt
