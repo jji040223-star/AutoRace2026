@@ -219,6 +219,10 @@ class MissionManager(Node):
                                            # 후진 8~17 번 → 끔, 예전 틈 가운데 추종 + 조향 후진·출구 추종만)
         p('m8_ack_arc_m', 0.35)            # 아커만 M8: 원호 검사 길이
         p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
+        p('m7_ack_gap_target', False)      # 아커만 M7: 목표 옆을 차로 가운데 대신 다음 줄 빈 구간 안 가장 가까운 점 (경계 지그재그 — 실차 반경 0.95 m,
+                                           #   real_limo 에서만 켬. 시뮬 기본 꺼짐)
+        p('m7_ack_gap_clear_m', 0.13)      #   빈 구간 = 상자 옆면에서 이만큼 안 (차 반폭 0.109 + 2 cm)
+        p('m7_ack_gap_horizon_m', 1.5)     #   이 거리 안 다음 줄만 봄
         p('m7_ack_ref_max_a_m', 1.2)       #   꺾기 시작을 이만큼 뒤까지 찾음
         p('m7_ack_ref_cross_funnel', True) #   깔때기 벽을 지켜선 S 자가 안 들어가면 깔때기 벽만 빼고 다시 찾음
         p('m7_ack_all_latch_m', 1.0)       #   ③ (깔때기 선 넘기) 로 정하면 이만큼 갈 때까지 유지
@@ -1248,6 +1252,39 @@ class MissionManager(Node):
         gr = self._m7['grid']
         return gr['phase'] + (gr['n_left'] - k) * self.get_parameter('m7_lane_width_m').value
 
+    def m7_gap_lt(self, sc, lc, k, lt, boxes):
+        """경계 지그재그 목표 옆 (m7_ack_gap_target): 차로 k 가운데 대신, 앞에 올 다음 줄 (앞면이 차 가운데보다 앞인 가장 가까운
+        상자와 s 가 겹치는 상자들) 에서 차로 k 가운데를 품은 빈 구간 [오른쪽 상자 + 여유, 왼쪽 상자 − 여유] 안에서 지금 옆과
+        가장 가까운 점. 실차 반경 0.95 m 는 한 칸 S 자에 1.31 m 가 필요한데 줄 사이 빈 길이는 0.2~0.5 m 라 차로 가운데를
+        목표로 하면 매 줄 막힘·후진 (실차 11-10 ack6~9) → 상자 폭이 좁으면 (≤ 0.28 m) 경계 근처로 거의 곧게 지나감.
+        빈 구간이 차 폭보다 좁거나 차로 k 가운데에 상자가 걸치면 차로 가운데 그대로."""
+        g = lambda k_: self.get_parameter(k_).value   # noqa: E731
+        W, cl, last = g('m7_lane_width_m'), g('m7_ack_gap_clear_m'), g('m7_lanes') - 1
+        ahead = [b for b in boxes if b[0] > sc and b[0] < sc + g('m7_ack_gap_horizon_m')]
+        if not ahead:
+            return lt
+        f = min(ahead, key=lambda b: b[0])
+        row = [b for b in ahead if b[0] < f[1] + 0.1]          # 같은 줄 (앞뒤가 겹치는 상자)
+        lo = max(self.m7_lane_l(last) - W / 2 + cl, lt - W / 2)   # 바깥 노란 선 안 (바퀴), 한 차로 이상은 안 감
+        hi = min(self.m7_lane_l(0) + W / 2 - cl, lt + W / 2)
+        for b in row:
+            if b[3] <= lt:
+                lo = max(lo, b[3] + cl)
+            elif b[2] >= lt:
+                hi = min(hi, b[2] - cl)
+            else:
+                return lt                  # 차로 k 가운데를 막은 줄 — 이 줄은 차로 선택이 정함
+        if lo > hi:
+            return lt
+        t = min(max(lc, lo), hi)
+        m = self._m7
+        key = (k, round(f[0], 1), round(t, 2))
+        if m.get('gap_key') != key:
+            m['gap_key'] = key
+            self.get_logger().info(f'[M7] 경계 목표: 다음 줄 s {f[0]:.2f}~{f[1]:.2f} 빈 옆 [{lo:+.2f}, {hi:+.2f}] → 옆 {t:+.2f} '
+                                   f'(차로 {k} 가운데 {lt:+.2f}, 지금 {lc:+.2f})')
+        return t
+
     # ---------------------------------------------------------------- M7 운전: 차 사각형 쓸기 검사
     def on_mux_selected(self, msg):
         if msg.data.startswith('mission+guard'):
@@ -1917,6 +1954,9 @@ class MissionManager(Node):
                                        f'{"비어 있음" if a_own == math.inf else f"{a_own:.2f} m"}, 차로 {j} 앞 '
                                        f'{"비어 있음" if aj == math.inf else f"{aj:.2f} m"} (s {sc:.2f} m)')
                 k, lt, changing = j, self.m7_lane_l(j), True
+        if self.ack() and g('m7_ack_gap_target'):
+            lt = self.m7_gap_lt(sc, lc, k, lt, boxes)
+            changing = abs(lc - lt) > g('m7_lane_done_m')
         blk_msg = None
         if self.ack():
             # 4a) 아커만: 원호 두 개 (첫 원호 → 둘째 원호) 후보 중 안 닿고 목표 차로 가운데·차로 방향에 가장 가까워지는 것
