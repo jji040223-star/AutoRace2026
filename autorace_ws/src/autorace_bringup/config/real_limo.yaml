@@ -37,7 +37,7 @@ lidar_processor:
 mission_manager:
   ros__parameters:
     m7_ack_choose_in_lane: true         # 목표 차로 가운데 전이라도 앞 장애물 보면 바로 다시 고름 (ack31: 0.13 m 에서야 고름)
-    m5_at_line: false                   # 실차는 서행 구간 흰 선을 못 잡음 (ack27·28·29 모두 2.2 m 뒤 서행 = 과속방지턱 지난 뒤) → 표지판 확인 즉시 서행
+    m5_at_line: true                    # 표지판 옆 정지선 (출발 뒤 약 1.45 m) 에 닿을 때 서행 (사용자 11-10). ack27-29 에서 선을 못 쓴 것은 best (2) 가 표지판을 선 지난 뒤에 확인해서 — 이전 표지판 모델은 출발선에서 봄
     m7_axis_yaw_check_deg: 35.0         # 코너에서 잰 차선 방향으로 90° 틀린 차로 방향 고르는 것 막음 (ack29)
     m4_sign_gives_up_m1: true           # M1 안 켜진 채 주차 표지판 → M1 포기·주차 (ack27)
     m7_line_relocate_after_entry: true  # 입구 1차로에서 노란 선 위치 다시 맞춤 안 함 (ack27)
