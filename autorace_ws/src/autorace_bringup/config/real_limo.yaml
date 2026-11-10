@@ -19,7 +19,7 @@ yolo_detector:
   ros__parameters:
     # 팀원 통합 모델 "best (2).pt" (yolo11n 640, 11-10 학습, 9 클래스: crosswalk parking slow speed_bump turn_a turn_b
     #   + green/red/yellow_light). 표지판 라벨이 기존 autorace_yolov8n.pt 와 같아 그대로 바꿔 끼움. 리모 홈에만 둠 (git 에 안 넣음).
-    model_path: "/home/wego/AutoRace2026_sim2d/sign_best2_1110.pt"
+    model_path: ""                      # 비움 = 이전 모델 autorace_yolov8n.pt (best (2) 는 갈림길 표지판을 ack30·31·32 연속 놓침). 신호등은 run 때 light_model:= 로 best (2)
 traffic_light:
   ros__parameters:
     det_max_age_s: 0.35                 # 실차 YOLO 7 Hz (추론 80 ms + 지연) — 0.15 면 영상 대부분이 박스 없음
