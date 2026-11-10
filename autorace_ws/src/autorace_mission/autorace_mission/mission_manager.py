@@ -221,7 +221,10 @@ class MissionManager(Node):
         p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
         p('m7_ack_gap_target', False)      # 아커만 M7: 목표 옆을 차로 가운데 대신 다음 줄 빈 구간 안 가장 가까운 점 (경계 지그재그 — 실차 반경 0.95 m,
                                            #   real_limo 에서만 켬. 시뮬 기본 꺼짐)
-        p('m7_ack_gap_clear_m', 0.13)      #   빈 구간 = 상자 옆면에서 이만큼 안. 실제로는 max(이것, 0.109 + m7_margin_m + 0.005)
+        p('m7_ack_hold_target', False)     # 아커만 M7: 막힘·후진 뒤 다시 고를 때 목표 차로를 유지 (들어가거나 아래 번 실패까지) — 후진
+                                           #   회전 방향이 바뀌어 각이 상쇄되지 않게 (실차 11-10 ack11). real_limo 에서만 켬
+        p('m7_ack_hold_fails', 3)          #   이만큼 다시 고르기에서 못 들어가면 고정 풀고 원래대로 고름
+        p('m7_ack_gap_clear_m', 0.13)     #   빈 구간 = 상자 옆면에서 이만큼 안. 실제로는 max(이것, 0.109 + m7_margin_m + 0.005)
         p('m7_ack_gap_horizon_m', 1.5)     #   이 거리 안 다음 줄만 봄
         p('m7_ack_ref_max_a_m', 1.2)       #   꺾기 시작을 이만큼 뒤까지 찾음
         p('m7_ack_ref_cross_funnel', True) #   깔때기 벽을 지켜선 S 자가 안 들어가면 깔때기 벽만 빼고 다시 찾음
@@ -1926,6 +1929,22 @@ class MissionManager(Node):
         side = self.m2_side()
         goal = None if side is None else (0 if side == 'A' else g('m7_lanes') - 1)
         prefer = self.m2_prefer()
+        hold = m.get('hold')
+        if hold is not None and (hold['k'] != k or abs(lc - lt) < W / 2):
+            if hold['k'] == k:
+                self.get_logger().info(f'[M7] 목표 차로 {k} 에 들어감 — 목표 고정 풀림 (s {sc:.2f} m)')
+            m['hold'] = hold = None           # 들어갔거나 다른 곳 (갈림길 표지판·반대쪽 재시도) 에서 목표를 바꿈
+        if hold is not None and rechoose and self.ack() and g('m7_ack_hold_target'):
+            # 막힘·후진 뒤 다시 고를 때 목표 차로를 바꾸면 후진 회전 (m7_ack_back_toward) 방향도 바뀌어 각이 상쇄됨
+            # (실차 11-10 ack11: 2→1→2→1, 한때 −44° 까지 갔다가 되돌아감) → 들어가거나 m7_ack_hold_fails 번 실패할 때까지 유지
+            hold['fails'] += 1
+            if hold['fails'] < g('m7_ack_hold_fails'):
+                self.get_logger().info(f'[M7] 목표 차로 {k} 유지 ({hold["fails"]}/{g("m7_ack_hold_fails")} 번째 다시 고르기, '
+                                       f'지금 옆 {lc:+.2f}, 목표 {lt:+.2f}, 방향 {math.degrees(psi):+.0f}°)')
+                rechoose = False              # 변경 중이라 아래 '다시 고르기' 를 건너뜀
+            else:
+                self.get_logger().info(f'[M7] 목표 차로 {k} 로 {hold["fails"]} 번 못 들어감 — 목표 고정 풀고 다시 고름')
+                m['hold'] = hold = None
         if o is not None and a_own < g('m7_block_m') and (not changing or rechoose):
             here = round((lc - m['grid']['phase']) / W)
             kh = self.m7_k(here)
@@ -1956,6 +1975,8 @@ class MissionManager(Node):
                 self.get_logger().info(f'[M7] 차로 {k} → {j}{" (다시 고름)" if rechoose else ""}: 내 차로 앞 {a_own:.2f} m 막힘, '
                                        f'차로 {j} 는 그 장애물 지나고 {"비어 있음" if aj == math.inf else f"{aj:.2f} m 비어 있음"} (s {sc:.2f} m)')
                 k, lt, changing = j, self.m7_lane_l(j), True
+                if self.ack() and g('m7_ack_hold_target'):
+                    m['hold'] = {'k': j, 'fails': 0}
             elif rechoose:
                 self.get_logger().info(f'[M7] 다시 골랐지만 옆 차로가 막은 장애물 옆에서 비어 있지 않음 — 차로 {k} 유지 (s {sc:.2f} m) | {self.m7_dump()}')
         ahead_any = any(ahead(j) < math.inf for j in range(g('m7_lanes')))
