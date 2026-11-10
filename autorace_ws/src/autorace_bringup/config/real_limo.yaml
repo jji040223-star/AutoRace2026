@@ -52,6 +52,8 @@ mission_manager:
     m8_ack_exit_turn_now: true          # 마지막 틈 지나면 출구선 맞추기 없이 바로 최대 오른쪽 코너 보조 — ack15: 출구 축 +85° 오계산으로 왼쪽 꺾어 바깥 이탈
     m7_ack_gap_target: true             # M7: 차로 가운데 대신 다음 줄 상자 사이 빈 구간 (경계 지그재그) 목표 — 반경 0.95 로 매 줄 차로 가운데 S 자는 불가 (다른 세션 11-10)
     m7_ack_gap_clear_m: 0.20            # 경계 목표의 상자 옆 여유 (기본 0.13 → 쓸기 검사 0.139 하한) — ack12: 빈 공간 가장자리 목표라 상자 모서리에 걸림 → 가운데 쪽으로
+    m7_lidar_clear_reach_m: 2.0         # 뎁스 기억 상자를 라이다 빔이 뚫으면 지우는 거리 (시뮬 1.2) — ack16: 비어 있는 왼쪽 차로에 가짜 상자가 남아 막힘 (5 번 늦게 지움)
+    m7_lidar_clear_scans: 3             #   연속 스캔 수 (시뮬 4, 약 0.3 s)
 parking_controller:
   ros__parameters:
     ack_min_radius_m: 0.95              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
