@@ -205,7 +205,10 @@ class MissionManager(Node):
         p('m8_ack_bias_min_kappa', 0.8)    # 아커만 M8: 앞 문 3 개로 잰 곡률이 이보다 클 때만 휨 바깥쪽으로 치우침
         p('m8_ack_outer_bias_m', 0.02)     # (11-10 c2·q9: 0.04 → 0.02 — 20 판 콘 0·후진 0, 0.04 는 입구 cone_0 을 차 앞 모서리로 침·후진 9~10 번) 아커만 M8: 본 라바콘이 m8_ack_outer_bias_after 개 넘으면 (마지막 문들) 목표를 왼쪽으로 이만큼
         p('m8_ack_outer_bias_after', 10)
-        p('m8_ack_path_scale', 1.0)        # 아커만: 쌍 가운데점의 통로 축에서 옆 거리를 이 배로 (1.0 = 그대로). 실차 반경 0.95 → 0.7
+        p('m8_ack_exit_turn_now', False)   # 아커만: 마지막 틈을 지나면 출구선 따라가기·맞추기 없이 바로 코너 보조 (최대 오른쪽) — 실차 반경
+                                           #   0.95 는 끝 쌍 바로 뒤에서 꺾어야 바깥선 안 (ack15). real_limo 에서만 켬
+        p('m8_ack_turn_now_min_m', 1.2)    #   M8 들어온 뒤 이만큼 온 뒤에만 (통로 1.8 m — 중간에서 틈을 잠깐 못 본 것과 구별)
+        p('m8_ack_path_scale', 1.0)       # 아커만: 쌍 가운데점의 통로 축에서 옆 거리를 이 배로 (1.0 = 그대로). 실차 반경 0.95 → 0.7
         p('m8_ack_corner_assist', True)    # 아커만 M8 출구에서 차선 쌍이 안 보이면 최대 오른쪽으로 코너 보조
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
         p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
@@ -2495,6 +2498,23 @@ class MissionManager(Node):
         lim = math.radians(g('m8_max_heading_deg'))
         aim = avoid.gate_aim(gates, g('m8_ack_aim_m') if self.ack() else g('m8_aim_m'), ref_y, ref_x, **self.m8_chain_kw())
         on_axis = False
+        if aim is None and self.ack() and g('m8_ack_exit_turn_now'):
+            # 실차 반경 0.95: 출구 코너는 끝 쌍 바로 뒤 (꼭짓점 0.95 m 전) 에서 꺾기 시작해야 바깥선 안 (다른 세션 계산 11-10:
+            # 콘을 나올 때 서쪽 ψ 이면 가장 높은 y = 끝 쌍 + 0.95(1 + sin ψ), ψ ≤ 11°). 출구선 따라가기·맞추기는 그 사이 왼쪽으로
+            # 꺾음 (실차 ack15: 출구선 PCA 가 85° 틀어져 w +1.39 → 바깥 이탈) → 끝 쌍을 지나면 바로 코너 보조 (최대 오른쪽).
+            # 통로 중간에서 틈을 잠깐 못 봐도 넘어가지 않게: 들어온 뒤 m8_ack_turn_now_min_m 이상 왔고, 앞 0.6 m · 옆 0.4 m 안에
+            # 라바콘이 없고, 최대 오른쪽 원호가 라바콘에 안 닿을 때만
+            moved_ = self.dist_from(m['start'])
+            ahead_c = [1 for x, y in car if 0.0 < x < 0.6 and abs(y) < 0.4]
+            k_r = -1.0 / g('ack_plan_radius_m')
+            clr_r = avoid.arc_clear(np.array([k_r]), boxes, g('m8_ack_arc_m'), steps=(0.0, 0.01))[0] if boxes else 1.0
+            if moved_ >= g('m8_ack_turn_now_min_m') and not ahead_c and clr_r >= 0.0:
+                m['exit'] = {'t': now, 'mid': self._pos, 'dir': self._yaw, 'assist': {'t': now}}
+                self.get_logger().info(f'[M8] 마지막 틈 지남 → 바로 코너 보조 (최대 오른쪽, 아커만 — 들어온 뒤 {moved_:.2f} m, '
+                                       f'본 라바콘 {len(m["seen"])} 개, 트랙 축과 '
+                                       f'{math.degrees(wrap(self._yaw - wrap(self._yaw0 + self._yaw_drift))) if self._yaw0 is not None else float("nan"):+.0f}°)')
+                self.m8_exit(now)
+                return
         if aim is None:                    # 마지막 틈을 지났으면 통로 출구선을 따라감 (곧게 가면 끝 쌍 방향으로 벗어남)
             ax = self.m8_axis()
             if ax is not None:
@@ -2505,7 +2525,16 @@ class MissionManager(Node):
         if aim is not None and not on_axis and self.ack() and kk < 1.0:
             # 아커만 실차 (최대 곡률 1.05): 쌍 가운데선을 그대로 따라가면 공식 배치 (sway 0.12, 주기 1.8) 의 최소 반경 0.68 m 를 못 돎
             # → 통로 축 (첫 쌍 가운데 + 차로 방향) 에서 목표점의 옆 거리를 kk 배로 줄여 완만하게 (0.7 배: 콘 여유 5~8 cm, 다른 세션 11-10 계산)
-            ax = self.m8_axis()
+            # 축 = M8 들어온 자리 + 들어올 때 차로 방향 (트랙 축 90° 단위). 본 라바콘 PCA (m8_axis) 는 실차에서 콘이 적을 때·odom
+            # 어긋남으로 51~85° 틀어짐 (ack15 '차로 방향이 라바콘 줄과 51° 다름') → 쓰지 않음. 차로 방향이 없거나 지금 방향과 60° 넘게
+            # 다르면 줄이지 않음
+            ld_ = m.get('lane_dir')
+            ax = None
+            if ld_ is not None:
+                if math.cos(wrap(ld_ - self._yaw)) < 0:
+                    ld_ = wrap(ld_ + math.pi)
+                if abs(wrap(ld_ - self._yaw)) < math.radians(60.0):
+                    ax = ((float(m['start'][0]), float(m['start'][1])), ld_)
             if ax is not None:
                 (ox, oy), hd = ax
                 c0, s0 = math.cos(self._yaw), math.sin(self._yaw)
