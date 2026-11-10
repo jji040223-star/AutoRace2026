@@ -209,9 +209,9 @@ class MissionManager(Node):
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
         p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
         p('m8_ack_assist_axis_deg', 12.0)  #   트랙 축 (주차 직선 방향) 에서 이 안이면 보조 끝
-        p('m8_ack_assist_pair_deg', 30.0)  #   차선 쌍으로 일찍 끝내는 건 트랙 축과 이 각 안일 때만 (g27·r10 +73° 에서 넘겨 바깥선 이탈)
+        p('m8_ack_assist_pair_deg', 20.0)  #   차선 쌍으로 일찍 끝내는 건 트랙 축과 이 각 안일 때만 (g27·r10 +73° 에서 넘겨 바깥선 이탈)
         p('m8_ack_exit_no_left', True)     # 아커만 출구선 맞추기: 출구 방향보다 왼쪽으로 안 넘김 (뒤가 오른쪽 모퉁이)
-        p('m8_ack_assist_s', 6.0)          #   길어야 이만큼 (반경 0.47 로 90° = 0.74 m, 0.15 m/s 면 4.9 s — 3 s 면 늘 시간으로 끝났음, 다른 세션)
+        p('m8_ack_assist_s', 10.0)          #   길어야 이만큼 (반경 0.47 로 90° = 0.74 m, 0.15 m/s 면 4.9 s — 3 s 면 늘 시간으로 끝났음, 다른 세션)
         p('m8_ack_exit_deg', 15.0)         # 아커만 M8 출구: 방향이 이 안이면 (옆 오차 무시) 바로 차선 추종에 넘김
         p('m8_ack_exit_s', 1.0)            #   길어야 이만큼
         p('m8_ack_arcs', False)            # 아커만 M8: 원호 후보로 고르기 (2D 시뮬 11-09 j: 매 순간 0.35 m 만 봐서 휜 통로 앞에서 막혀
@@ -382,6 +382,8 @@ class MissionManager(Node):
         p('m1_stop_frames', 3)             # 통과 중 크기 확인한 노랑·빨강 이만큼 (초록 없이) → 다시 섬
         p('m1_go_speed', 0.15)             # 초록 보고 통과할 때도 정지선을 지날 때까지 이 속도 (서행 — 그 사이 노랑이 되면 정지선에 설 수 있게)
         p('m1_log_s', 2.0)
+        p('m1_line_min_gap_m', 0.4)        # 신호등 앞 이보다 가까운 가로선 (횡단보도 먼 쪽 줄) 은 무시
+        p('m1_lost_go_s', 10.0)            # 정지 뒤 신호등 색이 이만큼 안 보이면 출발 (빨강·노랑이 보이는 동안은 계속 기다림). 0 = 끔
         p('m1_line_max_gap_m', 1.15)       # 신호등 앞 이만큼 안의 가로선에만 섬 (횡단보도 앞 가로줄 ~0.75 m). 더 먼 선 (서행 구간 앞 정지선 ~1.65 m) 무시. 0 = 끔
         # M2 갈림길
         p('m2_label_a', 'turn_a')          # 모델 클래스 이름: A (왼쪽 길)
@@ -2185,6 +2187,8 @@ class MissionManager(Node):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         m = self._m8
         self._reset_until = now + 0.5
+        if self.ack():
+            self._reset_right_until = self._reset_until   # 리셋 첫 메시지부터 'both_right' (차로 가운데는 오른쪽 — 다른 세션 deb1b25)
         self._m8_slow_until = now + g('m8_exit_slow_s')
         self._m8_done = True
         self.m7_publish(0.0, 0.0)
@@ -2310,7 +2314,9 @@ class MissionManager(Node):
                 # 출구 뒤는 늘 오른쪽 모퉁이 (시계 방향 트랙) — 출구선 옆 오차를 맞추려 왼쪽으로 출구 방향을 넘어가면 (15~25°)
                 # 오른쪽으로 돌기 시작이 늦어 모퉁이 바깥으로 밀림 (2D 시뮬 11-10 r1 113°·f23·f26: 시작 y 4.53~4.74, 다른 세션).
                 # 왼쪽 곡률은 남은 방향 오차만큼만 (출구 방향을 왼쪽으로 넘지 않게)
-                kap = min(kap, max(0.0, herr) / max(0.1, g('m8_exit_look_m')))
+                # (트랙 축 + 90° 상한도 해 봤지만 실차 가정 1 에서 10/10 → 8/10 (2D 시뮬 11-10 w2) 이라 뺌)
+                left = herr
+                kap = min(kap, max(0.0, left) / max(0.1, g('m8_exit_look_m')))
             w = v * max(-kmax, min(kmax, kap))
         self.m8_mode('exit', f'통로 출구선 맞추는 중: 방향 {math.degrees(herr):+.0f}°, 옆 {lat * 100:+.1f} cm')
         self.m7_publish(v, w)
@@ -2535,6 +2541,8 @@ class MissionManager(Node):
         self._light = msg
         m = self._m1
         if m:
+            if msg.color != 'none':
+                m['seen_t'] = self.get_clock().now().nanoseconds * 1e-9   # 신호등 색을 마지막으로 본 때
             self.m1_light_mark(m, msg)
             m['green_n'] = m.get('green_n', 0) + 1 if (msg.color == 'green' and msg.size_checked) else 0
             # 노랑·빨강 연속 수: 초록에서만 0 (램프 전환 중 애매해서 none 인 영상은 건너뜀 — 그때마다 0 이면 통과 중 정지가 늦음)
@@ -2588,6 +2596,14 @@ class MissionManager(Node):
             if n == 0:
                 self.get_logger().info(f'[M1] 신호등 {gap:.2f} m 앞 가로선은 지나감 (서행 구간 정지선 — {g("m1_line_max_gap_m")} m 안 선에만 섬)')
             return False
+        if gap < g('m1_line_min_gap_m'):
+            # 신호등에 너무 가까운 선 = 횡단보도 먼 쪽 줄 — 진짜 정지선은 이미 카메라 앞 사각으로 지나감. 여기 서면 신호등이 화각 밖
+            # (2D 시뮬 11-10 xab1: 늦게 시작해 x 3.58 에 섬, 신호등 방위 −42° → 박스 0 — 다른 세션). 크기 거리 ±25 % 라 넉넉히
+            n = m.get('near_n', 0)
+            m['near_n'] = n + 1
+            if n == 0:
+                self.get_logger().info(f'[M1] 신호등 {gap:.2f} m 앞 가로선은 무시 (횡단보도 먼 쪽 — {g("m1_line_min_gap_m")} m 보다 가까움)')
+            return False
         return True
 
     def m1_green(self):
@@ -2633,6 +2649,14 @@ class MissionManager(Node):
                 m['go_t'] = now
                 self.set_state('M1_GO', f'초록 (크기 확인 {m["green_n"]} 번 연속, 첫 초록 판정 뒤 {now - m.get("green_t", now):.2f} s) → 발진, '
                                         f'정지 {now - m.get("still_t", now):.1f} s')
+            elif ('still_t' in m and g('m1_lost_go_s') > 0
+                  and now - max(m['still_t'], m.get('seen_t', -1e9)) > g('m1_lost_go_s')):
+                # 서고 나서 신호등이 화면에 안 보임 (코너에서 비스듬히 섬 등) — 초록을 영영 못 봄. 규정상 15 s 넘게 서 있으면
+                # M1 은 어차피 실패 → 주차 (15 점) 라도 하러 감 (2D 시뮬 11-10 xab1: M1 정지선에서 10 분 대기)
+                cmd.stop = False
+                m['go_t'] = now
+                self.get_logger().warn(f'[M1] 정지 뒤 {g("m1_lost_go_s"):.0f} s 동안 신호등 색이 안 보임 — 출발 (M1 실패 감수, 다음 미션으로)')
+                self.set_state('M1_GO', f'신호등 안 보임 {g("m1_lost_go_s"):.0f} s → 발진')
             elif now - m['last_log'] >= g('m1_log_s'):
                 m['last_log'] = now
                 self.get_logger().info(f'[M1] 정지 유지 — {self.m1_light_desc()}')
@@ -2740,9 +2764,15 @@ class MissionManager(Node):
             self.m2_tick(now, cmd)
         if self.state == 'LANE' and not self._m4_started and self.m4_ready():
             self.start_parking(f'연습 모드 — 건너뛴 {sorted(self.skip)} 앞의 미션까지 끝')
-        if self.state in ('LANE', 'M4_PARKING') and now < self._m8_slow_until:
+        if (self.state in ('LANE', 'M4_PARKING') and now < self._m8_slow_until) or (self.state == 'M8_AVOID' and self.ack()):
+            # 아커만: M8 중에도 상한을 미리 걸어 둠 — 차선 추종의 상한은 램프 (speed_ramp) 로 따라가서, M8 동안 상한이 없다가
+            # 넘기는 순간 걸면 0.3 에서 내려오는 사이 0.28 로 0.4~0.6 m 감 (2D 시뮬 11-10 w22: 단선 오판 + 빠름 → 출발 차로로, 다른 세션)
             cmd.max_speed = float(g('m8_exit_speed'))     # 라바콘 뒤 차선을 다시 잡는 동안 천천히
         cmd.reset_window = now < self._reset_until
+        if cmd.reset_window and cmd.follow == 'both' and now < getattr(self, '_reset_right_until', 0.0):
+            # M8 코너 보조 뒤 리셋: 비스듬히 바깥선 (우리 차로 왼쪽 경계) 하나만 보일 때 그걸 오른쪽 경계로 오판해 출발 차로로 감
+            # (2D 시뮬 11-10 w22·w29) → lane_follower 가 리셋 첫 프레임 단선 판정에 중심 힌트 0.75 (오른쪽) 를 씀
+            cmd.follow = 'both_right'
         self.cmd_pub.publish(cmd)
         self.state_pub.publish(String(data=self.state))
 
