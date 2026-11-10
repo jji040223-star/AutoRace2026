@@ -340,6 +340,7 @@ class MissionManager(Node):
         p('m7_line_fix_frames', 8)         # 이만큼 모이면 그 중앙값 × m7_line_fix_gain 만큼 격자를 옮김
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
+        p('m7_ack_choose_in_lane', False)  # 아커만: 목표 차로 안이면 가운데 전이라도 앞 장애물로 차로를 고름 (실차 ack31)
         p('m7_rechoose_around_here', True)  # 다시 고를 때 지금 위치 차로 양옆도 후보 (목표 차로로 아직 못 옮겼을 때)
         p('m7_line_relocate', True)        # 끝 차로가 아니라고 믿는데 노란 바깥선 하나만 보이면 그 끝 차로로 격자를 다시 맞춤 (실차 11-06)
         p('m7_line_relocate_after_entry', False)  # 입구 1차로·깔때기를 지난 뒤에만 (실차 ack27)
@@ -2025,7 +2026,10 @@ class MissionManager(Node):
             else:
                 self.get_logger().info(f'[M7] 목표 차로 {k} 로 {hold["fails"]} 번 못 들어감 — 목표 고정 풀고 다시 고름')
                 m['hold'] = hold = None
-        if o is not None and a_own < g('m7_block_m') and (not changing or rechoose):
+        # 아커만: 목표 차로 안 (가운데에서 반 차로 안) 이면 '변경 중' 이어도 다음 장애물로 다시 고름 — 가운데에 18 cm 못 미친 채
+        # '변경 중' 으로 남아 앞 장애물을 10 s 동안 무시하다 0.13 m 에서야 고름 → 꺾을 거리 없어 막힘 (실차 ack31)
+        in_lane_now = self.ack() and g('m7_ack_choose_in_lane') and hold is None and abs(lc - lt) < W / 2
+        if o is not None and a_own < g('m7_block_m') and (not changing or rechoose or in_lane_now):
             here = round((lc - m['grid']['phase']) / W)
             kh = self.m7_k(here)
             # 후보: 막은 장애물을 지나가는 구간 [앞면 − window, 뒷면 + 0.15] 이 비어 있는 옆 차로, 변경 중이면 지금 위치 차로도

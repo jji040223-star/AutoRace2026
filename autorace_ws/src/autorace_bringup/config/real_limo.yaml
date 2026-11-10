@@ -36,6 +36,7 @@ lidar_processor:
     tall_cam_vfov_deg: 46.8             # 화면 위 끝 = 2·atan(cy 211.3 / fy 488.2) (영상 중심이 위로 치우쳐 있어 실제 세로 화각 52.4° 대신)
 mission_manager:
   ros__parameters:
+    m7_ack_choose_in_lane: true         # 목표 차로 가운데 전이라도 앞 장애물 보면 바로 다시 고름 (ack31: 0.13 m 에서야 고름)
     m5_at_line: false                   # 실차는 서행 구간 흰 선을 못 잡음 (ack27·28·29 모두 2.2 m 뒤 서행 = 과속방지턱 지난 뒤) → 표지판 확인 즉시 서행
     m7_axis_yaw_check_deg: 35.0         # 코너에서 잰 차선 방향으로 90° 틀린 차로 방향 고르는 것 막음 (ack29)
     m4_sign_gives_up_m1: true           # M1 안 켜진 채 주차 표지판 → M1 포기·주차 (ack27)
