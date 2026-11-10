@@ -313,6 +313,7 @@ class MissionManager(Node):
         p('m7_line_fix_frames', 8)         # 이만큼 모이면 그 중앙값 × m7_line_fix_gain 만큼 격자를 옮김
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
+        p('m7_rechoose_around_here', True)  # 다시 고를 때 지금 위치 차로 양옆도 후보 (목표 차로로 아직 못 옮겼을 때)
         p('m7_line_relocate', True)        # 끝 차로가 아니라고 믿는데 노란 바깥선 하나만 보이면 그 끝 차로로 격자를 다시 맞춤 (실차 11-06)
         p('m7_line_relocate_frames', 8)    #   이만큼 연속으로 모인 값의 중앙값만큼
         p('m7_line_relocate_spread_m', 0.08)  # 모인 값의 폭이 이보다 크면 안 씀
@@ -1875,7 +1876,10 @@ class MissionManager(Node):
             here = round((lc - m['grid']['phase']) / W)
             kh = self.m7_k(here)
             # 후보: 막은 장애물을 지나가는 구간 [앞면 − window, 뒷면 + 0.15] 이 비어 있는 옆 차로, 변경 중이면 지금 위치 차로도
-            cands = sorted({j for j in (k - 1, k + 1, kh)
+            # 다시 고를 때 아직 목표 차로로 못 옮겼으면 (kh != k) 지금 차로의 반대쪽 옆도 후보 — 목표 옆 차로만 보면 들어가자마자
+            # 막힌 차로 2 를 고른 뒤 '차로 2 유지' 만 반복하다 후진 3 번 뒤에야 차로 0 으로 감 (2D 시뮬 11-10 q99·a38·a39, t39)
+            extra = (kh - 1, kh + 1) if (rechoose and g('m7_rechoose_around_here') and kh != k) else ()
+            cands = sorted({j for j in (k - 1, k + 1, kh) + extra
                             if 0 <= j < g('m7_lanes') and j != k and window_free(j, o[0] - g('m7_enter_window_m'), o[1] + 0.15, skip=o)})
             jg = None if goal is None or goal == k else k + (1 if goal > k else -1)
             far = None if goal is None else g('m7_lanes') - 1 - goal
