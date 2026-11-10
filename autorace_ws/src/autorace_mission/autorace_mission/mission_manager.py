@@ -423,6 +423,7 @@ class MissionManager(Node):
         p('m1_log_s', 2.0)
         p('m1_line_min_gap_m', 0.4)        # 신호등 앞 이보다 가까운 가로선 (횡단보도 먼 쪽 줄) 은 무시
         p('m1_lost_go_s', 10.0)            # 정지 뒤 신호등 색이 이만큼 안 보이면 출발 (빨강·노랑이 보이는 동안은 계속 기다림). 0 = 끔
+        p('m1_line_extra_m', 0.0)          # M1 정지 목표만 이만큼 더 앞으로 [m] (실차 보정)
         p('m1_line_max_gap_m', 1.15)       # 신호등 앞 이만큼 안의 가로선에만 섬 (횡단보도 앞 가로줄 ~0.75 m). 더 먼 선 (서행 구간 앞 정지선 ~1.65 m) 무시. 0 = 끔
         # M2 갈림길
         p('m2_label_a', 'turn_a')          # 모델 클래스 이름: A (왼쪽 길)
@@ -2774,7 +2775,11 @@ class MissionManager(Node):
         line = st.get('line')
         if line is None:
             return None
-        return line[1] - self.dist_from(line[0])
+        return line[1] + self.m1_extra(st) - self.dist_from(line[0])
+
+    def m1_extra(self, st):
+        """M1 정지 목표를 이만큼 더 앞으로 (실차: 신호등 앞 횡단보도 정지선에서 선 앞에 서 보임 — 사용자 11-10)."""
+        return self.get_parameter('m1_line_extra_m').value if (st is self._m1 and st) else 0.0
 
     def m3_remaining(self):
         return self.line_remaining(self._m3)
@@ -2788,7 +2793,7 @@ class MissionManager(Node):
     def wheel_gap(self, st):
         """바퀴 맨 앞 → 정지선 가까운 끝 [m] (+ = 선 앞, 음수 = 밟음 또는 넘음), 오도메트리 추정."""
         g = lambda k: self.get_parameter(k).value   # noqa: E731
-        return self.line_remaining(st) + g('m3_line_margin_m') + g('m3_stop_gap_m')
+        return self.line_remaining(st) - self.m1_extra(st) + g('m3_line_margin_m') + g('m3_stop_gap_m')
 
     # ---------------------------------------------------------------- M1 신호등
     def on_light(self, msg):
