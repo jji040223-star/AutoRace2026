@@ -27,6 +27,7 @@ lidar_processor:
     tall_cam_vfov_deg: 46.8             # 화면 위 끝 = 2·atan(cy 211.3 / fy 488.2) (영상 중심이 위로 치우쳐 있어 실제 세로 화각 52.4° 대신)
 mission_manager:
   ros__parameters:
+    m3_line_margin_m: -0.02             # 정지 위치 (M3·M1): 바퀴 맨 앞이 정지선 가까운 끝에서 2 cm 들어간 곳 (정지선 위) — 사용자 11-10. 시뮬 +0.025 (선 앞)
     m7_cam_hfov_deg: 66.5
     m7_cam_yaw_deg: 0.26
     m7_axis0_from_start: false          # 트랙 축 고정 끔 — ack22: 출발 때 차가 비스듬해 축 41° (차로와 45° 차이) → M7 차로 방향·격자 엉망. 곧은 차선으로 잼 (M8 보조는 90° 단위라 어디서 출발해도 됨)
