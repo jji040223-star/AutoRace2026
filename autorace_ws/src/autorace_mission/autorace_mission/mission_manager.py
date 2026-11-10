@@ -359,6 +359,7 @@ class MissionManager(Node):
         p('cones_topic', '/perception/cones')
         p('m8_require_m2', True)           # 순서 힌트: M2 를 지난 뒤에만 (시험: 라바콘 앞에서 출발하면 false)
         p('m8_trigger_m', 1.5)
+        p('m8_after_m7_m', 0.0)            # M7 끝난 자리에서 이만큼 가기 전엔 M8 안 켬 (0 = 끔). 실차 1.5 — 연습 트랙 상자 다리를 라이다가 라바콘으로 봄 (ack18)
         p('m8_trigger_count', 4)
         p('m8_confirm_frames', 3)
         p('m8_cone_half_m', 0.055)         # 라바콘 바닥판 반 변 (0.11 m) — 쓸기 검사 상자 (바퀴가 바닥판에 닿지 않게)
@@ -2143,6 +2144,7 @@ class MissionManager(Node):
             self.set_state('LANE', f'앞 {g("m7_clear_m")} m 비어 있음, 차로 변경 {m["changes"]} 번, 지금 차로 {k}, '
                                    f'구간 {sc:.2f} m{" (안전장치 거리)" if sc > g("m7_max_m") else ""} → 슬라이딩 윈도우 리셋')
             self._m7_done = True
+            self._m7_end_pos = self._pos
             self.m2_commit(k)
 
     def m3_floor(self):
@@ -2283,7 +2285,9 @@ class MissionManager(Node):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self._cones = [(p.position.x, p.position.y) for p in msg.poses]
         if (self.state not in ('LANE',) + SLOW_STATES or self._m8_done or self._pos is None or 'M8' in self.skip
-                or (g('m8_require_m2') and not self.done_or_skipped('M2'))):
+                or (g('m8_require_m2') and not self.done_or_skipped('M2'))
+                or (g('m8_after_m7_m') > 0 and getattr(self, '_m7_end_pos', None) is not None
+                    and self.dist_from(self._m7_end_pos) < g('m8_after_m7_m'))):
             self._m8_hits = 0
             return
         ahead = [(x, y) for x, y in self.m8_car() if 0.0 < x < g('m8_trigger_m') and abs(y) < 0.8]
