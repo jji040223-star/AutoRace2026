@@ -12,6 +12,9 @@ lane_follower:
     camera_yaw_deg: 0.26
     yellow_hsv_lo: [10, 57, 133]        # 연습 트랙 노란 선 H 14–21, S 82–124, V 191–255 (매트 0 %)
     yellow_hsv_hi: [25, 255, 255]
+    # 아커만 실차 (11-10 ack6: 코너에서 늦게 꺾어 이탈 — 바퀴가 명령의 절반 (28° → 13°) 만 꺾임). 팀원 11-09 ack5 에서 확인한 값
+    curve_steer_bias: 0.6               # 시뮬 0.25 — 코너가 보이면 미리 꺾음
+    curve_slow: 0.8                     # 시뮬 0.5 — 코너 감속
 depth_obstacle:
   ros__parameters:
     cam_height: 0.192
