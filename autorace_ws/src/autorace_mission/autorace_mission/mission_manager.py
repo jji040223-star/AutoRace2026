@@ -265,7 +265,9 @@ class MissionManager(Node):
         p('m7_lidar_trim_reach_m', 1.2)    #   라이다에서 상자 가까운 면까지 이 안
         p('m7_lidar_trim_pad_m', 0.03)     #   라이다 점 바깥 여유
         p('m7_lidar_trim_min_m', 0.10)     #   줄여도 이 두께는 남김
-        p('m7_lidar_gate', False)          # 라이다가 비었다고 본 (한 번이라도) 뎁스 상자는 바로 판단에서 뺌 (지우기 전에도). 실차 켬
+        p('m7_obs_max_age_s', 0.0)         # 뎁스 장애물 메시지가 이보다 늦었거나 (지금 − 영상 시각) 그 시각이 오도메트리 기록 밖이면 버림.
+                                           #   0 = 끔. 묵은 자세로 넣으면 코너에서 상자가 돌아감 (실차 11-10 ack17 의심). '[M7] 뎁스 장애물 시각' 로그 보고 정함
+        p('m7_lidar_gate', False)         # 라이다가 비었다고 본 (한 번이라도) 뎁스 상자는 바로 판단에서 뺌 (지우기 전에도). 실차 켬
         p('m7_lidar_clear', True)         # 뎁스로 기억한 상자 자리를 라이다 빔이 뚫고 지나가면 (가짜) 지움
         p('m7_lidar_clear_scans', 4)       #   이만큼 연속 (라이다 8~10 Hz → 약 0.5 s)
         p('m7_lidar_clear_reach_m', 1.2)   #   라이다에서 상자 가까운 면까지 이 안일 때만
@@ -808,12 +810,31 @@ class MissionManager(Node):
     # ---------------------------------------------------------------- M7 장애물
     def on_obstacles(self, msg):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
-        pose = self.pose_at(stamp_s(msg.header))
+        now = self.get_clock().now().nanoseconds * 1e-9
+        # 시각 진단: 뎁스 영상 시각이 지금보다 얼마나 늦은지, 그 시각에 가장 가까운 오도메트리 기록과 얼마나 떨어졌는지.
+        # 실차 11-10 ack17: M7 입구 뎁스 상자가 실제 1 줄 상자를 차 기준 약 +25° 돌린 자리 (라이다는 맞음) — 코너에서 오른쪽으로
+        # ~4°/s 도는 중이라 약 6 s 묵은 자세를 쓴 것과 맞음 (다른 세션 분석). 원인 확인용으로 5 s 마다 최대값을 남김
+        st = stamp_s(msg.header)
+        h_ = self._odom_hist
+        dt_h = min((abs(e[0] - st) for e in (h_[0], h_[-1])), default=0.0) if h_ and not (h_[0][0] <= st <= h_[-1][0]) else 0.0
+        dg = self._obs_diag if hasattr(self, '_obs_diag') else None
+        if dg is None:
+            dg = self._obs_diag = {'t': now, 'age': 0.0, 'dt': 0.0, 'n': 0, 'drop': 0}
+        dg['age'], dg['dt'], dg['n'] = max(dg['age'], now - st), max(dg['dt'], dt_h), dg['n'] + 1
+        if now - dg['t'] >= 5.0:
+            self.get_logger().info(f'[M7] 뎁스 장애물 시각: 5 s 동안 {dg["n"]} 장, 가장 늦은 것 {dg["age"]:+.2f} s, 오도메트리 기록 밖 '
+                                   f'{dg["dt"]:.2f} s, 버림 {dg["drop"]} 장 (오도메트리 기록 {len(h_)} 개 '
+                                   f'{(h_[-1][0] - h_[0][0]) if h_ else 0:.1f} s)')
+            self._obs_diag = {'t': now, 'age': 0.0, 'dt': 0.0, 'n': 0, 'drop': 0}
+        mx_age = g('m7_obs_max_age_s')
+        if mx_age > 0 and (now - st > mx_age or dt_h > 0.1):
+            self._obs_diag['drop'] += 1    # 묵은 관측을 묵은 (또는 기록 밖) 자세로 넣으면 상자가 돌아가 엉뚱한 차로에 생김
+            return
+        pose = self.pose_at(st)
         if pose is None:
             return
         px, py, pyaw = pose
         c, s = math.cos(pyaw), math.sin(pyaw)
-        now = self.get_clock().now().nanoseconds * 1e-9
         trig = False
         for o in msg.obstacles:
             if o.y_left - o.y_right > g('m7_max_width_m'):
