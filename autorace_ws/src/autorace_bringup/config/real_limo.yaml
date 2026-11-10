@@ -61,6 +61,10 @@ mission_manager:
     m7_lidar_clear_reach_m: 2.0         # 뎁스 기억 상자를 라이다 빔이 뚫으면 지우는 거리 (시뮬 1.2) — ack16: 비어 있는 왼쪽 차로에 가짜 상자가 남아 막힘 (5 번 늦게 지움)
     m7_lidar_clear_scans: 3             #   연속 스캔 수 (시뮬 4, 약 0.3 s)
     m7_lidar_gate: true                 # 라이다 빔이 한 번이라도 뚫고 지나간 뎁스 상자는 지우기 전에도 판단에서 뺌 — ack16·17: 가짜 상자로 목표 차로 0↔1↔2 반복
+    m7_line_fix_gain: 1.0               # 노란 선 보정 한 번에 다 반영 (시뮬 0.5) — ack21: 진입 격자 보정 0 개 (비스듬히 들어옴) → '차로 2 가운데' 가
+    m7_line_fix_frames: 4               #   실제 오른쪽 노란 바깥선 위, 21~32 s 선을 타고 감. 보정 장 수 (시뮬 8)
+    m7_line_fix_max_m: 0.30             #   보정 합 상한 (시뮬 0.15)
+    m7_line_fix_gate_m: 0.35            #   격자와 이보다 다르면 버림 (시뮬 0.20)
 parking_controller:
   ros__parameters:
     ack_min_radius_m: 0.47              # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
