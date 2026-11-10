@@ -1,0 +1,9 @@
+# 실차 신호등 (M1) — traffic_light.yaml 위에 덮어씀. drive.launch 가 light_model 이 sim 이 아닐 때 (실차 기본 real) 붙인다.
+# 모델: models/traffic_light_real_yolov8n.pt (YOLOv8n 640, 클래스 green sign·red sign·yellow sign — 실물 장난감 신호등 영상 515 장,
+#   AutoRace2026 저장소 yolo/traffic_light). 박스 = 정면 3구 몸체만 (옆면 보행 신호 제외) → 시뮬 박스보다 훨씬 홀쭉하다.
+traffic_light:
+  ros__parameters:
+    color_labels: ["red sign", "yellow sign", "green sign"]   # 빨강·노랑·초록 순서 그대로 (traffic_light.py COLORS)
+    aspect_min: 2.5                     # 세로:가로. 학습 데이터 박스 5–95 % = 3.0–4.1 (시뮬 몸체 박스 1.7 기준 1.4–2.1 이면 전부 버려짐)
+    aspect_max: 5.0                     # 모델 예측 박스 (640×480) 1–99 % = 2.9–4.6
+    # body_h_m (0.205) 는 그대로. 대회 신호등 몸체 높이를 재서 다르면 여기에 적는다 (크기 → 거리 → 정지선 예상 거리 확인에 씀).
