@@ -353,6 +353,10 @@ class MissionManager(Node):
         p('m8_stop_gap_m', 0.03)
         p('m8_rot_limit_deg', 15.0)        # 통로 안 제자리 회전 한도
         p('m8_stuck_check_s', 1.0)
+        p('m8_ack_guard_back', True)       # 아커만: mux 라이다 앞 안전 정지 (v 만 0, w 그대로) 가 걸리면 기다리지 않고 바로 후진.
+                                           # 디퍼렌셜은 그 w 로 제자리에서 돌아 빠지지만 아커만은 v 0 이면 안 움직여 m8_stuck_check_s 동안
+                                           # 서 있었음 (2D 시뮬 11-10 s2·u2 거의 매 판 1 번, 규정 M8 '멈추면 재시작')
+        p('mux_selected_topic', '/cmd_vel_mux/selected')
         p('m8_back_m', 0.10)
         p('m8_retry_max', 3)
         p('m8_end_clear_m', 1.0)
@@ -429,6 +433,7 @@ class MissionManager(Node):
         self._yaw_rate = 0.0
         self._imu = None                   # (시각, 적분 yaw, 자이로 z) — 자이로 적분, 기준은 M7 들어갈 때 odom yaw 에 맞춤
         self._scan = None                  # (시각, 점 x, 점 y) base_link 기준
+        self._guard_t = -math.inf          # mux 가 mission 명령을 라이다 안전 정지로 막은 마지막 시각
         self._cones = []                   # lidar_processor 라바콘 (odom)
         self._m8, self._m8_hits, self._m8_done, self._m8_slow_until = {}, 0, False, 0.0
         self._m7_done = False
@@ -465,6 +470,7 @@ class MissionManager(Node):
         self.create_subscription(Imu, g('imu_topic'), self.on_imu, qos_profile_sensor_data)
         self.create_subscription(LaserScan, g('scan_topic'), self.on_scan, qos_profile_sensor_data)
         self.create_subscription(PoseArray, g('cones_topic'), self.on_cones, 10)
+        self.create_subscription(String, g('mux_selected_topic'), self.on_mux_selected, 20)
         self.create_subscription(TrafficLight, g('light_topic'), self.on_light, 10)
         self.parking_pub = self.create_publisher(Empty, g('parking_start_topic'), 10)
         self.create_subscription(Empty, '/parking/done', self.on_parking_done, 10)
@@ -1236,6 +1242,10 @@ class MissionManager(Node):
         return gr['phase'] + (gr['n_left'] - k) * self.get_parameter('m7_lane_width_m').value
 
     # ---------------------------------------------------------------- M7 운전: 차 사각형 쓸기 검사
+    def on_mux_selected(self, msg):
+        if msg.data.startswith('mission+guard'):
+            self._guard_t = self.get_clock().now().nanoseconds * 1e-9
+
     def ack(self):
         return self.get_parameter('drive_mode').value == 'ackermann'
 
@@ -2497,6 +2507,9 @@ class MissionManager(Node):
                             'gap': f'틈 {gap:.2f} m 쪽 {math.degrees(tgt):+.0f}° → 방향 {math.degrees(h):+.0f}° (빈 거리 {fr:.2f} m)',
                             'nogap': f'틈이 안 보임 → 방향 {math.degrees(h):+.0f}° (빈 거리 {fr:.2f} m)'}[kind])
         why = m['mon'].update(now, self._pos, self._yaw, v, w)
+        if why is None and v > 0 and self.ack() and g('m8_ack_guard_back') and now - self._guard_t < 0.25:
+            why = '라이다 앞 안전 정지 (아커만은 v 0 이면 못 돎)'
+            m['mon'].reset()
         if why is not None:
             n = m['retry'].add(self._pos)
             if n > g('m8_retry_max'):
