@@ -265,6 +265,7 @@ class MissionManager(Node):
         p('m7_lidar_trim_reach_m', 1.2)    #   라이다에서 상자 가까운 면까지 이 안
         p('m7_lidar_trim_pad_m', 0.03)     #   라이다 점 바깥 여유
         p('m7_lidar_trim_min_m', 0.10)     #   줄여도 이 두께는 남김
+        p('m7_lidar_gate', False)          # 라이다가 비었다고 본 (한 번이라도) 뎁스 상자는 바로 판단에서 뺌 (지우기 전에도). 실차 켬
         p('m7_lidar_clear', True)         # 뎁스로 기억한 상자 자리를 라이다 빔이 뚫고 지나가면 (가짜) 지움
         p('m7_lidar_clear_scans', 4)       #   이만큼 연속 (라이다 8~10 Hz → 약 0.5 s)
         p('m7_lidar_clear_reach_m', 1.2)   #   라이다에서 상자 가까운 면까지 이 안일 때만
@@ -1702,7 +1703,10 @@ class MissionManager(Node):
         sf = sc + CAR_HALF_L
         W = g('m7_lane_width_m')
         half_lane = W / 2 - g('m7_lane_margin_m')
-        boxes = [self.m7_box(ob) for ob in self._obs]
+        # 실차: 지난 스캔에서 라이다 빔이 상자 자리를 뚫고 지나간 (lidar_empty ≥ 1) 뎁스 상자는 지우기 전이라도 판단에서 뺌.
+        # 지우기 (m7_lidar_clear_scans 번 연속) 를 기다리는 동안 그 가짜 상자로 목표 차로를 바꿔 버림 (ack16·17 같은 자리 반복)
+        gate = g('m7_lidar_gate')
+        boxes = [self.m7_box(ob) for ob in self._obs if not (gate and ob.get('lidar_empty', 0) >= 1)]
         if g('m7_lidar_trim'):
             boxes = self.m7_lidar_trim(boxes, sc, lc, psi)
         near = [b for b in boxes if b[1] > sc - 0.8 and b[0] < sc + g('m7_check_m') + 0.5 and abs((b[2] + b[3]) / 2 - lc) < 1.3]

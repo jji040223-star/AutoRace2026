@@ -54,6 +54,7 @@ mission_manager:
     m7_ack_gap_clear_m: 0.20            # 경계 목표의 상자 옆 여유 (기본 0.13 → 쓸기 검사 0.139 하한) — ack12: 빈 공간 가장자리 목표라 상자 모서리에 걸림 → 가운데 쪽으로
     m7_lidar_clear_reach_m: 2.0         # 뎁스 기억 상자를 라이다 빔이 뚫으면 지우는 거리 (시뮬 1.2) — ack16: 비어 있는 왼쪽 차로에 가짜 상자가 남아 막힘 (5 번 늦게 지움)
     m7_lidar_clear_scans: 3             #   연속 스캔 수 (시뮬 4, 약 0.3 s)
+    m7_lidar_gate: true                 # 라이다 빔이 한 번이라도 뚫고 지나간 뎁스 상자는 지우기 전에도 판단에서 뺌 — ack16·17: 가짜 상자로 목표 차로 0↔1↔2 반복
 parking_controller:
   ros__parameters:
     ack_min_radius_m: 0.95              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
