@@ -15,6 +15,11 @@ lane_follower:
     # 아커만 실차 (11-10 ack6: 코너에서 늦게 꺾어 이탈 — 바퀴가 명령의 절반 (28° → 13°) 만 꺾임). 팀원 11-09 ack5 에서 확인한 값
     curve_steer_bias: 0.25              # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
     curve_slow: 0.5                     # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
+yolo_detector:
+  ros__parameters:
+    # 팀원 통합 모델 "best (2).pt" (yolo11n 640, 11-10 학습, 9 클래스: crosswalk parking slow speed_bump turn_a turn_b
+    #   + green/red/yellow_light). 표지판 라벨이 기존 autorace_yolov8n.pt 와 같아 그대로 바꿔 끼움. 리모 홈에만 둠 (git 에 안 넣음).
+    model_path: "/home/wego/AutoRace2026_sim2d/sign_best2_1110.pt"
 depth_obstacle:
   ros__parameters:
     cam_height: 0.192
