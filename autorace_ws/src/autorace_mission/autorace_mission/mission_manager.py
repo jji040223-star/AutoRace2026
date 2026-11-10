@@ -203,7 +203,7 @@ class MissionManager(Node):
         p('m7_ack_d2_m', 0.70)             #   둘째 원호 길이 (S 자 뒤쪽 — 먼저 꺾어도 빠져나올 수 있는지)
         p('m8_ack_aim_m', 0.25)            # 아커만 M8 목표점 거리 — 길면 일찍 꺾기 시작해 정점에서 덜 자름 (시험: 0.40~0.50, 다른 세션 제안)
         p('m8_ack_bias_min_kappa', 0.8)    # 아커만 M8: 앞 문 3 개로 잰 곡률이 이보다 클 때만 휨 바깥쪽으로 치우침
-        p('m8_ack_outer_bias_m', 0.04)     # 아커만 M8: 본 라바콘이 m8_ack_outer_bias_after 개 넘으면 (마지막 문들) 목표를 왼쪽으로 이만큼
+        p('m8_ack_outer_bias_m', 0.02)     # (11-10 c2·q9: 0.04 → 0.02 — 20 판 콘 0·후진 0, 0.04 는 입구 cone_0 을 차 앞 모서리로 침·후진 9~10 번) 아커만 M8: 본 라바콘이 m8_ack_outer_bias_after 개 넘으면 (마지막 문들) 목표를 왼쪽으로 이만큼
         p('m8_ack_outer_bias_after', 10)
         p('m8_ack_corner_assist', True)    # 아커만 M8 출구에서 차선 쌍이 안 보이면 최대 오른쪽으로 코너 보조
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
