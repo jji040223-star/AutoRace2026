@@ -331,6 +331,7 @@ class MissionManager(Node):
         p('yaw_drift_gate_deg', 20.0)       #   지금 추정과 이보다 다르면 버림 (코너·오인식)
         p('yaw_drift_max_curv', 0.03)
         p('yaw_drift_max_w', 0.15)          #   [rad/s] 이보다 빨리 돌면 안 잼        # 트랙 축을 못 쟀으면 90° 로 맞추지 않고 잰 방향 그대로
+        p('m7_axis_yaw_check_deg', 0.0)    # >0: 차선 추정 차로 방향과 차 방향이 다른 직선을 가리키고 차가 그 직선과 이 각 안이면 차 방향을 믿음 (실차 ack29)
         p('m7_axis_frames', 20)            # 차로 방향 추정에 쓰는 최근 /lane/state 수
         p('m7_line_fix', True)             # 맨 왼쪽·맨 오른쪽 차로에서 노란 바깥선 하나만 보이면, 그 선으로 잰 차로 가운데와 격자 중심의 차이로
                                            # 격자를 옮김 (격자는 LIMO 로 잡은 그대로 + 이 보정. LIMO 가 차로 가운데에 없거나 오도메트리가 틀어져도)
@@ -1077,7 +1078,16 @@ class MissionManager(Node):
             if g('m7_axis_need_yaw0'):
                 return est, est, how + ', 트랙 축 모름 → 맞추지 않음'
             y0 = 0.0
-        return wrap(y0 + round(wrap(est - y0) / snap) * snap), est, how + (f', 트랙 축 {math.degrees(self._yaw0):.1f}°' if self._yaw0 is not None else '')
+        ax = wrap(y0 + round(wrap(est - y0) / snap) * snap)
+        yc = g('m7_axis_yaw_check_deg')
+        if yc > 0 and self._yaw is not None:
+            # 차선 방향 추정이 코너에서 잰 값이라 크게 틀릴 수 있음 (실차 ack29: 추정 −119° → −85° 로 90° 틀린 차로 방향 →
+            # 모든 원호 0 m 에서 막혀 멈춤). 차 방향이 어느 직선 방향과 yc 안이고 그 방향이 추정과 다르면 차 방향을 믿음
+            ay = wrap(y0 + round(wrap(self._yaw - y0) / snap) * snap)
+            if abs(wrap(ay - ax)) > 1e-3 and abs(wrap(self._yaw - ay)) < math.radians(yc):
+                how += f', 차선 추정 {math.degrees(ax):.0f}° 대신 차 방향 {math.degrees(self._yaw):.0f}° 로 고름'
+                ax = ay
+        return ax, est, how + (f', 트랙 축 {math.degrees(self._yaw0):.1f}°' if self._yaw0 is not None else '')
 
     def m7_enter(self):
         g = lambda k: self.get_parameter(k).value   # noqa: E731

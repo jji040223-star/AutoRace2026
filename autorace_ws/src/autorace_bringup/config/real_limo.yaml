@@ -36,6 +36,7 @@ lidar_processor:
     tall_cam_vfov_deg: 46.8             # 화면 위 끝 = 2·atan(cy 211.3 / fy 488.2) (영상 중심이 위로 치우쳐 있어 실제 세로 화각 52.4° 대신)
 mission_manager:
   ros__parameters:
+    m7_axis_yaw_check_deg: 35.0         # 코너에서 잰 차선 방향으로 90° 틀린 차로 방향 고르는 것 막음 (ack29)
     m4_sign_gives_up_m1: true           # M1 안 켜진 채 주차 표지판 → M1 포기·주차 (ack27)
     m7_line_relocate_after_entry: true  # 입구 1차로에서 노란 선 위치 다시 맞춤 안 함 (ack27)
     m3_line_margin_m: -0.02             # 정지 위치 (M3·M1): 바퀴 맨 앞이 정지선 가까운 끝에서 2 cm 들어간 곳 (정지선 위) — 사용자 11-10. 시뮬 +0.025 (선 앞)
