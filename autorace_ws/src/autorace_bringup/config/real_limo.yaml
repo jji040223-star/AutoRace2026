@@ -64,8 +64,8 @@ mission_manager:
 parking_controller:
   ros__parameters:
     ack_min_radius_m: 0.47              # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
-    ack_park_margin_m: 0.08             # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
-                                        #   60~72° 에서 네 모서리 칸 안 (여유 8.6 cm, 이웃 LIMO 0.2 m — 다른 세션 park_geom.py 11-10). 시뮬 +0.08
+    ack_park_margin_m: -0.02            # 원호 시작 = 칸 가운데 − (0.47 + 이것) = 0.45 m 앞 (시뮬 +0.08 = 0.55) — ack21: 실차가 중간 곡률에서 명령보다
+                                        #   더 돌아 (곡률 1 → 1.25) 90° 를 칸 가운데선 10.6 cm 전에 다 돎 → 칸 안 옆 −10.9 cm (오른쪽 여유 3 cm)
     ack_min_speed: 0.05
     inside_margin_m: 0.04               # 칸 안 판정 여유 — 줄자 vs 로그 차이 2 cm 넘으면 0.06~0.08
 odom_imu:
