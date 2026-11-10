@@ -224,6 +224,8 @@ class MissionManager(Node):
         p('m7_ack_ref', True)              # 아커만 M7: 차로 바꿀 때 기준 S 자 (가장 이른 안 닿는 시작) 를 목표로
         p('m7_ack_gap_target', False)      # 아커만 M7: 목표 옆을 차로 가운데 대신 다음 줄 빈 구간 안 가장 가까운 점 (경계 지그재그 — 실차 반경 0.95 m,
                                            #   real_limo 에서만 켬. 시뮬 기본 꺼짐)
+        p('m7_ack_guard_back', False)      # 아커만 M7: mux 앞 안전 정지가 걸리면 바로 후진 (M8 m8_ack_guard_back 과 같음). 실차 켬
+        p('m7_ack_idle_back_s', 0.0)       # 아커만 M7: 이 시간 동안 3 cm 도 안 움직이면 후진 (0 = 끔). 실차 4.0
         p('m7_ack_hold_target', False)     # 아커만 M7: 막힘·후진 뒤 다시 고를 때 목표 차로를 유지 (들어가거나 아래 번 실패까지) — 후진
                                            #   회전 방향이 바뀌어 각이 상쇄되지 않게 (실차 11-10 ack11). real_limo 에서만 켬
         p('m7_ack_hold_fails', 3)          #   이만큼 다시 고르기에서 못 들어가면 고정 풀고 원래대로 고름
@@ -2109,6 +2111,22 @@ class MissionManager(Node):
         else:
             m['blocked'] = None
             m['rechosen'] = False
+        # 4b) 아커만 실차 안전망 (ack19: 상자 10 cm 앞 mux 안전 정지 + '갈 원호 없음' 과 원호가 번갈아 나와 막힘 타이머·막힘 감시가
+        #     계속 처음부터 → 40 s 제자리): mux 앞 안전 정지가 걸렸거나, m7_ack_idle_back_s 동안 3 cm 도 안 움직였으면 후진
+        if self.ack():
+            idl = m.get('idle')
+            if idl is None or math.dist(self._pos, idl[0]) > 0.03:
+                m['idle'] = idl = (self._pos, now)
+            reason = None
+            if g('m7_ack_guard_back') and now - self._guard_t < 0.25:
+                reason = '라이다 앞 안전 정지 (아커만은 v 0 이면 못 돎)'
+            elif g('m7_ack_idle_back_s') > 0 and now - idl[1] > g('m7_ack_idle_back_s'):
+                reason = f'{now - idl[1]:.1f} s 동안 3 cm 도 안 움직임'
+            if reason is not None:
+                m['idle'] = None
+                self.m7_back_start(now, reason)
+                self.m7_publish(0.0, 0.0)
+                return
         # 5) 명령은 움직이라는데 몸이 안 움직임 (밀고 있음) → 바로 전진을 멈추고 후진
         why = m['mon'].update(now, self._pos, yaw, v, w)
         if why is not None:
