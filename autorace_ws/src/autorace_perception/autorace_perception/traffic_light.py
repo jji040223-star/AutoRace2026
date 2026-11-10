@@ -68,6 +68,8 @@ class TrafficLightNode(Node):
                                            # 진짜 신호등은 세 칸 대비가 낮아 버려지고 모니터 그림만 남은 적 있음)
         p('transition_window_s', 3.0)      # 대비가 낮을 때: 이 동안 어두웠다가
         p('transition_ratio', 2.0)         #   이 배 넘게 밝아진 칸이 하나뿐이면 그 칸이 켜진 것 (전환 직후 꺼진 칸 잔상)
+        p('det_max_age_s', 0.15)           # 영상 시각과 가장 가까운 YOLO 결과가 이보다 멀면 박스 없음으로 봄
+        p('publish_unmatched', True)       # false: 맞는 YOLO 결과가 없는 영상은 아무것도 안 냄 (실차 YOLO 가 영상보다 느릴 때)
         p('size_tol', 0.25)                # |크기 거리 − 예상 거리| ≤ 이 비율 × 예상 거리
         p('light_beyond_m', 1.65)          # 정지선 가까운 끝 → 신호등, 진행 방향 [m] (시뮬: 정지선 x 2.28, 신호등 x 3.95)
         p('light_beyond2_m', 0.75)         # 횡단보도 정지선 (서행 구간 정지선 다음 가로선, x 3.20) → 신호등 [m]. 첫 선을 지난 뒤 이 선으로 바꿈
@@ -238,7 +240,10 @@ class TrafficLightNode(Node):
         t = stamp_s(msg.header)
         dets = min(self._dets, key=lambda e: abs(e[0] - t), default=None)
         labels = {g('light_label'): None, **{lb: i for i, lb in enumerate(g('color_labels'))}}
-        boxes = [] if dets is None or abs(dets[0] - t) > 0.15 else [d for d in dets[1].detections if d.label in labels]
+        if (dets is None or abs(dets[0] - t) > g('det_max_age_s')) and not g('publish_unmatched'):
+            return          # 이 영상에 맞는 YOLO 결과가 없음 — 'none' 을 내면 색 연속 수가 끊김 (실차 ack27: YOLO 7 Hz · 영상 30 Hz 라
+            #                 빨강·none 이 번갈아 나와 M1 연속 5 번을 못 채움)
+        boxes = [] if dets is None or abs(dets[0] - t) > g('det_max_age_s') else [d for d in dets[1].detections if d.label in labels]
         ch = 4 if msg.encoding.endswith('a8') else 3
         img = np.frombuffer(msg.data, np.uint8).reshape(msg.height, msg.step // ch, ch)[:, :msg.width, :3]
         bgr = img[:, :, ::-1] if msg.encoding.startswith('rgb') else img

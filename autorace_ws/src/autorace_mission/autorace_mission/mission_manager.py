@@ -129,6 +129,8 @@ class MissionManager(Node):
         # M3 보행자 표지판 정지
         p('m4_require_sign', True)         # 주차 표지판 (P) 을 본 뒤에만 주차 모드 (순서 조건만으로 켜면 주차 구역이 아닌 곳에서
                                            #   트랙 옆 물체를 주차 LIMO 로 보고 차선 추종을 놓았다 — 실차 11-05)
+        p('m4_sign_gives_up_m1', False)    # M8 뒤 M1 (신호등) 이 안 켜진 채 주차 표지판을 보면 M1 포기하고 주차 (실차 ack27: 빨강을 봤는데
+        #                                    M1 이 안 켜져 주차 앞을 지나 한 바퀴 더 돎 — 주차 15 점이라도)
         p('m4_labels', ['parking'])
         p('m4_min_conf', 0.5)
         p('m4_min_box_px', 20)
@@ -339,6 +341,7 @@ class MissionManager(Node):
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
         p('m7_rechoose_around_here', True)  # 다시 고를 때 지금 위치 차로 양옆도 후보 (목표 차로로 아직 못 옮겼을 때)
         p('m7_line_relocate', True)        # 끝 차로가 아니라고 믿는데 노란 바깥선 하나만 보이면 그 끝 차로로 격자를 다시 맞춤 (실차 11-06)
+        p('m7_line_relocate_after_entry', False)  # 입구 1차로·깔때기를 지난 뒤에만 (실차 ack27)
         p('m7_line_relocate_frames', 8)    #   이만큼 연속으로 모인 값의 중앙값만큼
         p('m7_line_relocate_spread_m', 0.08)  # 모인 값의 폭이 이보다 크면 안 씀
         p('m7_line_relocate_max_m', 0.60)  #   이보다 크게 옮겨야 하면 안 씀 (한 차로 0.52 + 여유 — 두 차로 건너뛰기 막음. 2D 시뮬 11-08 a7: +53.5 cm 로 반대쪽 끝)
@@ -626,6 +629,11 @@ class MissionManager(Node):
                                    f'최근 {g("sign_window_frames")} 장 중 {self._hits["m4"]} 장, odom {self.fmt(self._pos)})')
             if self._m4_pending:
                 self.start_parking(self._m4_pending + ' + 주차 표지판')
+            elif (g('m4_sign_gives_up_m1') and not self._m1_done and not self._m4_started and 'M1' not in self.skip
+                  and self.done_or_skipped('M8') and self.state in ('LANE',) + SLOW_STATES):
+                self._m1_done = True
+                self.get_logger().warn(f'[M1] 신호등 미션이 안 켜진 채 주차 표지판을 봄 — M1 포기 ({self.m1_light_desc()})')
+                self.start_parking('M1 포기 (주차 표지판 먼저 봄)')
         if self._m2['done'] or self._m8_done:
             return                         # 순서 힌트: 갈림길 (·라바콘) 뒤에는 서행·보행자 표지판 미션이 없다
         cooling = (self._m3_cooldown_from is not None
@@ -1248,6 +1256,13 @@ class MissionManager(Node):
             # 3차선 끝의 A/B 분리대 노란 선과 헷갈리지 않게 구간 앞쪽 (s < m7_line_relocate_max_s) 에서만.
             if not g('m7_line_relocate') or sc_ > g('m7_line_relocate_max_s'):
                 return
+            if g('m7_line_relocate_after_entry') and g('m7_entry_walls'):
+                # 입구 1차로 (흰 가로선 + 깔때기 전) 에서 보이는 노란 선은 1차로 양옆 선 — 세 차로 바깥선으로 보면 격자가 한 차로 옮겨져
+                # 입구 가상 벽 안에 갇힘 (실차 ack27: −42.5 cm 옮겨 모든 원호 0.17 m 에서 막힘 → 제자리 앞뒤 13 번)
+                end_ = m.get('bar_s')
+                if sc_ < (g('m7_entry_single_m') if end_ is None else end_) + g('m7_entry_funnel_m'):
+                    m.pop('relocate', None)
+                    return
             hd = math.radians(g('m7_line_relocate_heading_deg'))
             if abs(h) > hd or abs(msg.lane_heading_rad) > hd:
                 return

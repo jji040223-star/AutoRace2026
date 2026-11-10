@@ -20,6 +20,10 @@ yolo_detector:
     # 팀원 통합 모델 "best (2).pt" (yolo11n 640, 11-10 학습, 9 클래스: crosswalk parking slow speed_bump turn_a turn_b
     #   + green/red/yellow_light). 표지판 라벨이 기존 autorace_yolov8n.pt 와 같아 그대로 바꿔 끼움. 리모 홈에만 둠 (git 에 안 넣음).
     model_path: "/home/wego/AutoRace2026_sim2d/sign_best2_1110.pt"
+traffic_light:
+  ros__parameters:
+    det_max_age_s: 0.35                 # 실차 YOLO 7 Hz (추론 80 ms + 지연) — 0.15 면 영상 대부분이 박스 없음
+    publish_unmatched: false            # 맞는 YOLO 결과 없는 영상은 안 냄 → 빨강·none 번갈아 M1 연속 수 끊김 막음 (ack27)
 depth_obstacle:
   ros__parameters:
     cam_height: 0.192
@@ -32,6 +36,8 @@ lidar_processor:
     tall_cam_vfov_deg: 46.8             # 화면 위 끝 = 2·atan(cy 211.3 / fy 488.2) (영상 중심이 위로 치우쳐 있어 실제 세로 화각 52.4° 대신)
 mission_manager:
   ros__parameters:
+    m4_sign_gives_up_m1: true           # M1 안 켜진 채 주차 표지판 → M1 포기·주차 (ack27)
+    m7_line_relocate_after_entry: true  # 입구 1차로에서 노란 선 위치 다시 맞춤 안 함 (ack27)
     m3_line_margin_m: -0.02             # 정지 위치 (M3·M1): 바퀴 맨 앞이 정지선 가까운 끝에서 2 cm 들어간 곳 (정지선 위) — 사용자 11-10. 시뮬 +0.025 (선 앞)
     m7_cam_hfov_deg: 66.5
     m7_cam_yaw_deg: 0.26
