@@ -58,6 +58,9 @@ class CmdVelMux(Node):
         p('guard_side_m', 0.02)            # 통로 = 차 폭 + 양쪽 이만큼
         p('guard_release_m', 0.03)         # 막은 뒤 이만큼 물러나거나
         p('guard_release_deg', 15.0)       #   이만큼 돌면 풀어 줌 (그때 다시 보고 판단)
+        p('drive_mode', 'diff')            # drive.launch 가 넘김
+        p('ack_steer_gain', 1.0)           # 아커만: 차로 나가는 w 에 곱함 (곡률 = w/v 를 이만큼 크게 명령). 실차 LIMO (11-10 측정): 명령 곡률의
+                                           # 절반만 돎 (1.0 → 0.49, 2.0 → 1.0, 최대 1.05 = 반경 0.95 m) → 2.0. 시뮬은 1.0
         p('scan_stale_s', 0.5)             # 라이다가 이만큼 끊기면 안전 정지 안 함 (경고)
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.state = 'LANE'
@@ -185,7 +188,13 @@ class CmdVelMux(Node):
         if not self.get_parameter('enable').value:
             # enable:=false 는 예전엔 lane_follower 에만 가서 mission (M3/M1 접근·M7)·parking 명령은 그대로 나갔음 (다른 세션 지적 11-10)
             msg, tag = Twist(), f'{tag}+disabled'
-        self.pub.publish(msg)
+        gain = self.get_parameter('ack_steer_gain').value
+        if gain != 1.0 and self.get_parameter('drive_mode').value == 'ackermann' and msg.angular.z != 0.0:
+            out = Twist()
+            out.linear.x, out.angular.z = msg.linear.x, msg.angular.z * gain
+            self.pub.publish(out)          # 노드들이 계획한 곡률이 실제로 나오게 (로그·판단은 원래 명령 기준)
+        else:
+            self.pub.publish(msg)
         self.sel_pub.publish(String(data=tag))
         eps = self.get_parameter('stop_eps').value
         v, w = msg.linear.x, msg.angular.z

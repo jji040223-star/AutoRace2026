@@ -13,8 +13,8 @@ lane_follower:
     yellow_hsv_lo: [10, 57, 133]        # 연습 트랙 노란 선 H 14–21, S 82–124, V 191–255 (매트 0 %)
     yellow_hsv_hi: [25, 255, 255]
     # 아커만 실차 (11-10 ack6: 코너에서 늦게 꺾어 이탈 — 바퀴가 명령의 절반 (28° → 13°) 만 꺾임). 팀원 11-09 ack5 에서 확인한 값
-    curve_steer_bias: 0.8               # 시뮬 0.25 — 코너가 보이면 미리 꺾음 (ack7 0.6: 이탈 줄었지만 노란 선 밟음 → 0.8)
-    curve_slow: 0.8                     # 시뮬 0.5 — 코너 감속
+    curve_steer_bias: 0.4               # 시뮬 0.25. 게인 없이 0.8 (ack8·9 코너 가운데) → cmd_vel_mux ack_steer_gain 2.0 으로 실제 꺾임이 2 배라 0.4
+    curve_slow: 0.8                     # 시뮬 0.5 — 코너 감속 (최대 곡률 1.05 라 코너에서 느리게)
 depth_obstacle:
   ros__parameters:
     cam_height: 0.192
@@ -30,12 +30,13 @@ mission_manager:
     m7_cam_hfov_deg: 66.5
     m7_cam_yaw_deg: 0.26
     # 아커만 (11-10) — 실차 측정 전엔 시뮬 기본값. 실차검증_아커만.md 의 측정 1·5 결과로 바꿈 (주차 쪽과 같은 값)
-    ack_min_radius_m: 0.47              # 최대 조향 원 반경 (뒷축 가운데, 좌우 중 큰 쪽)
+    ack_min_radius_m: 0.95              # 최대 조향 원 반경 — 실차 11-10 측정 (곡률 최대 1.05, 좌우 같음). 시뮬 0.47
+    ack_plan_radius_m: 1.0              # 경로 계획 반경 (시뮬 0.52) — 측정 최대에 여유
     ack_min_speed: 0.05                 # 실제로 움직이는 가장 작은 속도 + 0.01
     m7_ack_back_straighten: false       # 후진은 조향 0 (실차 11-10 사용자: 바퀴가 13° 까지만 꺾여 펴며 후진해도 그대로)
 parking_controller:
   ros__parameters:
-    ack_min_radius_m: 0.47              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
+    ack_min_radius_m: 0.95              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
     ack_min_speed: 0.05
     inside_margin_m: 0.04               # 칸 안 판정 여유 — 줄자 vs 로그 차이 2 cm 넘으면 0.06~0.08
 odom_imu:
@@ -44,3 +45,4 @@ odom_imu:
 cmd_vel_mux:
   ros__parameters:
     stale_s: 0.5                        # 실차 차선 노드가 YOLO 와 같이 돌아 초당 7~18 장 → 0.3 s 끊김이 잦아 멈칫 (11-05). 0.5 s
+    ack_steer_gain: 2.0                 # 실차 11-10 측정: 명령 곡률의 절반만 돎 → 나가는 w 2 배 (최대 곡률 1.05 는 못 넘음)
