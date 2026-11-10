@@ -294,6 +294,8 @@ class MissionManager(Node):
         p('m7_back_speed', 0.06)
         p('m7_ack_min_speed', 0.0)         # 아커만 M7 원호 전진 최저 속도 (0 = ack_min_speed 만). 실차 0.1 (ack10: 0.08 로 정지에서 출발 못 함)
         p('m7_ack_back_straighten', True)  # 아커만 후진 중 차로 방향 쪽으로 펴며 후진. False = 조향 0 으로 곧게 (실차 11-10: 조향이 13° 까지만 꺾여 펴는 효과 없음 — 사용자)
+        p('m7_ack_back_toward', False)     # 아커만 후진: 가야 할 쪽 (목표 옆) 으로 앞머리가 돌게 반대 조향 (3 점 회전). 실차 켬
+        p('m7_ack_back_toward_deg', 35.0)  #   이미 그쪽으로 이만큼 틀어져 있으면 곧게 후진
         p('m7_back_timeout_s', 4.0)        # m7_back_m 한 번 기준 (더 많이 물러날 때는 비례해서 늘림)
         p('m7_back_grow', True)            # 같은 자리 n 번째 막힘이면 m7_back_m × n 만큼 물러남
         p('m7_back_grow_max', 3)
@@ -1834,7 +1836,17 @@ class MissionManager(Node):
             if why is None:
                 self.m7_mode('back', '후진 중')
                 w_b = 0.0
-                if self.ack() and g('m7_ack_back_straighten'):
+                tl = m.get('lt')
+                side = 0 if tl is None or abs(tl - lc) < g('m7_lane_done_m') else (1 if tl > lc else -1)
+                if self.ack() and g('m7_ack_back_toward') and side != 0 and side * psi < math.radians(g('m7_ack_back_toward_deg')):
+                    # 아커만 3 점 회전: 후진하며 바퀴를 가야 할 쪽 반대로 → 앞머리가 가야 할 쪽으로 돎 (w 부호 = 앞머리 도는 쪽).
+                    # 곧게 후진하면 각이 안 바뀌어 같은 자리에서 같은 판단 반복 (실차 11-10 ack10, 사용자 제안). 반경 0.95 로 0.2 m 면 ~12°
+                    vb = g('m7_back_speed')
+                    w_b = side * vb / g('ack_min_radius_m')
+                    if not bk.get('turn_logged'):
+                        bk['turn_logged'] = True
+                        self.get_logger().info(f'[M7] 후진 중 — 앞머리를 {"왼" if side > 0 else "오른"}쪽으로 돌림 (목표 옆 {tl:+.2f}, 지금 {lc:+.2f}, 방향 {math.degrees(psi):+.0f}°)')
+                elif self.ack() and g('m7_ack_back_straighten'):
                     # 아커만: 곧게 후진하면 방향이 그대로라 같은 자리에 다시 낀다 (2D 시뮬 11-09 c3: 14° 틀어진 채 첫 줄 LIMO 와
                     # 바깥 벽 사이에 끼어 후진 3 번 모두 실패) → 후진하면서 차로 방향 쪽으로 편다 (후진이라 w 부호 = 방향 줄이는 쪽)
                     vb = g('m7_back_speed')
@@ -1960,6 +1972,7 @@ class MissionManager(Node):
         if self.ack() and g('m7_ack_gap_target'):
             lt = self.m7_gap_lt(sc, lc, k, lt, boxes)
             changing = abs(lc - lt) > g('m7_lane_done_m')
+        m['lt'] = lt                       # 후진 때 가야 할 쪽 (m7_ack_back_toward)
         blk_msg = None
         if self.ack():
             # 4a) 아커만: 원호 두 개 (첫 원호 → 둘째 원호) 후보 중 안 닿고 목표 차로 가운데·차로 방향에 가장 가까워지는 것
