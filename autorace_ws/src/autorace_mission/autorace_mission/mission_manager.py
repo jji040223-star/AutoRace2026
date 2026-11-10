@@ -340,6 +340,7 @@ class MissionManager(Node):
         p('m7_line_fix_frames', 8)         # 이만큼 모이면 그 중앙값 × m7_line_fix_gain 만큼 격자를 옮김
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
+        p('m7_final_two_lanes', False)     # 장애물 다 지났는데 갈림길 반대쪽 끝 차로 (두 칸) 면 한 칸씩 옮긴 뒤 끝냄 (실차 ack35)
         p('m7_ack_choose_in_lane', False)  # 아커만: 목표 차로 안이면 가운데 전이라도 앞 장애물로 차로를 고름 (실차 ack31)
         p('m7_rechoose_around_here', True)  # 다시 고를 때 지금 위치 차로 양옆도 후보 (목표 차로로 아직 못 옮겼을 때)
         p('m7_line_relocate', True)        # 끝 차로가 아니라고 믿는데 노란 바깥선 하나만 보이면 그 끝 차로로 격자를 다시 맞춤 (실차 11-06)
@@ -2190,16 +2191,19 @@ class MissionManager(Node):
         self.m7_publish(v, w)
         # 끝: 변경이 끝났고 내 차로 앞이 비었고, 다른 차로에도 가까운 장애물이 없을 때 (또는 안전장치 거리)
         clear = all(ahead(j) > g('m7_clear_m') for j in range(g('m7_lanes')))
-        if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and abs(k - goal) == 1
+        two = g('m7_final_two_lanes') and goal is not None and abs(k - goal) == 2
+        step_k = None if goal is None else (goal if not two else k + (1 if goal > k else -1))
+        if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and (abs(k - goal) == 1 or two)
                 and not m.get('final_shift')
                 and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)
                                                 and (island or self.dist_from(self._m2.get('lock_pos')) < g('m7_ack_final_after_lock_m'))))
-                and window_free(goal, sc - g('m7_enter_window_m'), sf + 0.6)):
+                and window_free(step_k, sc - g('m7_enter_window_m'), sf + 0.6)):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
-            m['final_shift'] = True
-            m['n'], m['changes'] = m['grid']['n_left'] - goal, m['changes'] + 1
-            self.get_logger().info(f'[M7] 장애물 다 지남 — 갈림길 {side} 쪽 차로 {goal} 로 옮긴 뒤 끝냄 (지금 차로 {k}, s {sc:.2f} m)')
+            # m7_final_two_lanes: 반대쪽 끝 차로 (두 칸) 면 한 칸씩 (실차 ack35: 맨 왼쪽에서 B 표지판을 늦게 봐 A 로 감)
+            m['final_shift'] = not two
+            m['n'], m['changes'] = m['grid']['n_left'] - step_k, m['changes'] + 1
+            self.get_logger().info(f'[M7] 장애물 다 지남 — 갈림길 {side} 쪽 차로 {step_k} 로 옮긴 뒤 끝냄 (지금 차로 {k}, 목표 {goal}, s {sc:.2f} m)')
             return
         # 최소 구간: 2D 시뮬 11-09 r9 — 오른쪽 차로가 1~3 째 줄까지 비어 s 1.29 m 에서 '앞 1.0 m 빔' 으로 끝냄 → 차선 추종으로
         # 4 째 줄 (같은 차로 2.0 m 앞, 뎁스엔 보였음) 에 부딪힘. 마지막 줄은 s 3.5 m 안 → 3.0 m 부터는 그 줄이 m7_clear_m 안에 들어옴
