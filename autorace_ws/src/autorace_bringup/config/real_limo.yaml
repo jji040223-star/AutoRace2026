@@ -38,6 +38,7 @@ mission_manager:
     m7_back_grow: false                 #   늘리지 않음 (ack8·9: 0.45 m 까지 늘어 이전 구간까지 물러남)
     m8_back_m: 0.2                      # M8 후진도 0.2 (시뮬 0.10)
     m8_ack_path_scale: 0.7              # M8: 통로 축에서 옆 흔들림 0.7 배 — 공식 배치 가운데선 최소 반경 0.68 < 실차 0.95 (다른 세션 계산: 여유 5~8 cm)
+    m7_ack_gap_target: true             # M7: 차로 가운데 대신 다음 줄 상자 사이 빈 구간 (경계 지그재그) 목표 — 반경 0.95 로 매 줄 차로 가운데 S 자는 불가 (다른 세션 11-10)
 parking_controller:
   ros__parameters:
     ack_min_radius_m: 0.95              # mission_manager 와 같게 (주차는 오른쪽 반경이 중요 — 좌우 다르면 오른쪽)
