@@ -193,6 +193,8 @@ class MissionManager(Node):
                                            # 정차 LIMO 끼리는 0.52 m 이상 떨어져 있다)       # 뎁스는 앞면만 보므로 장애물 길이를 이만큼으로 가정 (LIMO 0.322)
         p('m7_block_m', 1.2)               # 내 차로 앞이 이 거리 안에서 막히면 갈 차로를 정한다 (실제로 꺾는 때는 쓸기 검사가 정함)
         p('m7_enter_window_m', 0.30)       # 옆 차로 후보: 막은 장애물 앞면 이만큼 앞 ~ 뒷면 + 0.15 m 가 그 차로에서 비어 있어야 (차 길이쯤 — 꺾는 때는 쓸기 검사가 정함)
+        p('m7_ack_enter_max_deg', 0.0)     # 아커만: 차로와 이보다 비스듬하면 M7 안 켬 (0 = 끔). 실차 12 — ack21·23 비스듬 진입으로 바깥선
+        p('m7_ack_enter_force_m', 0.6)     #   단 장애물이 이보다 가까우면 비스듬해도 켬
         p('m7_max_yaw_rate', 0.25)         # [rad/s] 이보다 빨리 돌고 있으면 (코너) 켜지 않음 — 차로 방향을 잘못 잡는다
         # 구동 방식: diff (네 바퀴 차동 — 제자리 회전) | ackermann (앞바퀴 조향 — 제자리 회전 없음, 최소 회전 반경)
         p('drive_mode', 'diff')
@@ -914,15 +916,29 @@ class MissionManager(Node):
             if (inlane and o.x_near < g('m7_trigger_m')
                     and o.y_left - o.y_right >= g('m7_min_width_m') and o.height >= g('m7_min_height_m')):
                 trig = True
+                self._m7_trig_near = min(getattr(self, '_m7_trig_near_new', 9.0), o.x_near)
+                self._m7_trig_near_new = self._m7_trig_near
                 # 무엇을 보고 켜졌는지 (유리벽·바닥 오검출 확인용 — 뎁스 로그는 2 s 마다라 그 장면이 안 남음)
                 self._m7_trig_desc = (f'앞 {o.x_near:.2f} m 옆 {o.y_right:+.2f}~{o.y_left:+.2f} 폭 {o.y_left - o.y_right:.2f} '
                                       f'높이 {o.height:.2f}')
         self.prune_obs(now)
         self._m7_hits = self._m7_hits + 1 if trig else 0
+        near_x = getattr(self, '_m7_trig_near_new', 9.0)
+        self._m7_trig_near_new = 9.0
         two_yellow = self._lane is not None and self._lane.yellow_side == 2
         turning = abs(self._yaw_rate) > g('m7_max_yaw_rate')
+        # 아커만 실차: 코너를 덜 돈 채 (차로와 비스듬히) 켜지면 입구 격자 보정 점이 0 개라 차로 위치가 어긋나 바깥 노란 선을
+        # 타고 감 (ack21·23: 방향 오차 +23°). 장애물이 아직 m7_ack_enter_force_m 보다 멀면 차로와 m7_ack_enter_max_deg 안이 될 때까지
+        # 차선 추종을 계속 (그동안 차선 쌍으로 격자 보정 점도 모임)
+        skewed = False
+        if self.ack() and g('m7_ack_enter_max_deg') > 0 and near_x > g('m7_ack_enter_force_m') and self._yaw is not None:
+            herr = abs(wrap(self._yaw - self.lane_axis()[0]))
+            skewed = herr > math.radians(g('m7_ack_enter_max_deg'))
+            if skewed and self._m7_hits >= g('m7_confirm_frames') and not getattr(self, '_m7_skew_logged', False):
+                self._m7_skew_logged = True
+                self.get_logger().info(f'[M7] 장애물 {near_x:.2f} m 앞이지만 차로와 {math.degrees(herr):.0f}° 비스듬 — 곧아질 때까지 차선 추종')
         if (self.state in ('LANE',) + SLOW_STATES and self._m7_hits >= g('m7_confirm_frames') and not two_yellow
-                and not turning and not self._m7_done and not self._m2['done'] and not self._m8_done and 'M7' not in self.skip):
+                and not turning and not skewed and not self._m7_done and not self._m2['done'] and not self._m8_done and 'M7' not in self.skip):
             self.m7_enter()
 
     def obs_containing(self, q, margin, near=None):
