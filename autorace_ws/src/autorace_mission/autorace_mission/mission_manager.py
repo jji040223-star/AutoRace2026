@@ -270,6 +270,8 @@ class MissionManager(Node):
         p('m7_ack_island', True)           # 아커만: 갈림길 분리대 (가운데 차로 끝 쐐기 섬) 를 M7 벽으로 — 있으면 잠금 뒤 옮기기 거리 제한 없음
         p('m7_ack_island_nose_m', 4.30)    #   입구 흰 가로선 → 섬 코 (도면 4.39, 여유 0.09). 코에서 0.25 m 동안 45° 로 폭 0.5 까지
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
+        p('m7_back_far_after', 0)          # 같은 자리 이 번째 후진부터 m7_back_far_m 만큼 (0 = 끔, real_limo 3)
+        p('m7_back_far_m', 0.3)
         p('m7_ack_no_opposite_exit', False)  # 아커만: 갈림길 반대쪽 끝 차로에서도 옆이 빌 때까지 안 끝냄 (실차 ack40, real_limo 에서 켬)
         p('m7_ack_no_center_exit', True)  # 아커만: 가운데 차로 (분리대로 가는 차로) 에서는 '앞이 비었다' 로 끝내지 않음 — 목표 차로가
                                            # 옆 장애물로 아직 막혀 있어도 m7_min_exit_m 에서 끝내 가운데로 남으면, 차선 추종은 노란 선만 보므로
@@ -1832,6 +1834,8 @@ class MissionManager(Node):
         # 같은 자리에서 다시 막히면 더 많이 물러남 (0.15 → 0.30 → 0.45 m) — 같은 거리만 물러나면 같은 판단·같은 자리로 돌아와
         # 앞뒤만 반복했다 (실차 11-06 full11: 두 상자 사이 틈으로 꺾을 거리가 모자람)
         back_m = g('m7_back_m') * (min(count, g('m7_back_grow_max')) if g('m7_back_grow') else 1)
+        if g('m7_back_far_after') > 0 and count >= g('m7_back_far_after'):
+            back_m = max(back_m, g('m7_back_far_m'))   # 같은 자리 n 번째부터 더 물러남 (실차 11-11 ack41: 0.2 m 로 22 번 같은 자리)
         m['back'] = {'from': self._pos, 't': now, 'm': back_m}
         self.get_logger().warn(f'[M7] 막힘: {reason} → 후진 {back_m:.2f} m (같은 자리 {count}/{g("m7_retry_max")} 번째, '
                                f'뒤 라이다 빈 거리 {"없음(라이다 안 들어옴)" if rf is None else f"{rf:.2f} m"})')
