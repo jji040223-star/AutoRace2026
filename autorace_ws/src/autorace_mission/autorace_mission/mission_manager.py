@@ -75,7 +75,7 @@ from rclpy.node import Node
 from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import Empty, String
 
-from autorace_mission import avoid
+from autorace_mission import avoid, gap_choice
 from autorace_mission.avoid import RetryCounter, StuckMonitor
 from geometry_msgs.msg import PoseArray
 
@@ -347,6 +347,19 @@ class MissionManager(Node):
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
         p('m7_final_two_lanes', False)     # 장애물 다 지났는데 갈림길 반대쪽 끝 차로 (두 칸) 면 한 칸씩 옮긴 뒤 끝냄 (실차 ack35)
+        p('m7_gap_mode', False)            # 아커만 M7: 차로 번호 대신 다음 줄의 빈 틈을 목표로 (gap_choice.py, 실차 11-11). 끄면 옛 차로 고르기
+        p('m7_gap_horizon_m', 2.5)         #   이 앞까지 상자를 줄로 묶어 봄
+        p('m7_gap_row_tol_m', 0.30)        #   앞면 차이가 이 안이면 같은 줄
+        p('m7_gap_buf_m', 0.05)            #   틈 가장자리에서 이만큼 안을 목표로
+        p('m7_gap_w_dir', 1.0)             #   차가 향한 쪽 반대 틈 벌점 [m / rad]
+        p('m7_gap_dir_deg', 10.0)          #   이보다 덜 틀어졌으면 방향 벌점 없음
+        p('m7_gap_w_next', 0.5)            #   다음 줄 틈과 어긋난 옆 거리 벌점 배율
+        p('m7_gap_w_goal', 0.2)            #   (마지막 줄) 갈림길 쪽 끝 차로와 옆 거리 벌점 배율
+        p('m7_gap_hold_m', 0.15)           #   지난번 고른 틈 유지 보너스 [m]
+        p('m7_gap_slack_m', 0.10)          #   S 자 길이가 앞 거리 + 이것 안이면 들어간다고 봄
+        p('m7_gap_lidar', True)            #   라이다 점도 줄에 넣음 (뎁스 화각 ±33° 밖 첫 줄 옆 상자 — 실차 ack39)
+        p('m7_gap_lidar_m', 1.6)           #   이 거리 안 라이다 점만
+        p('m7_entry_walls_need_bar', False)  # 흰 가로선을 실제로 봤을 때만 입구·깔때기 가상 벽 (실차는 못 봄 → 추측 벽에 갇힘, ack37·39)
         p('m7_ack_choose_in_lane', False)  # 아커만: 목표 차로 안이면 가운데 전이라도 앞 장애물로 차로를 고름 (실차 ack31)
         p('m7_rechoose_around_here', True)  # 다시 고를 때 지금 위치 차로 양옆도 후보 (목표 차로로 아직 못 옮겼을 때)
         p('m7_line_relocate', True)        # 끝 차로가 아니라고 믿는데 노란 바깥선 하나만 보이면 그 끝 차로로 격자를 다시 맞춤 (실차 11-06)
@@ -1836,7 +1849,7 @@ class MissionManager(Node):
                 self.get_logger().info(f'[M7] 3차선 입구 흰 가로선: s {m["bar_s"]:.2f} m (지금 s {sc:.2f}) — 그때까지 1차로, 뒤로 깔때기')
             end = m.get('bar_s')
             if end is None:
-                end = g('m7_entry_single_m')
+                end = -99.0 if g('m7_entry_walls_need_bar') else g('m7_entry_single_m')   # 못 봤으면 추측 벽 안 세움
             fl = g('m7_entry_funnel_m')
             if sc < end + fl:
                 l1 = self.m7_lane_l(int(g('m7_entry_lane')))
@@ -2008,6 +2021,33 @@ class MissionManager(Node):
                         return
                     self.m7_publish(v, w)
                     return
+        # 3a) 틈 고르기 (m7_gap_mode): 다음 줄 빈 틈 목표 — 켜져 있으면 아래 차로 고르기는 값만 계산하고 결정은 안 함
+        gap_res = None
+        if self.ack() and g('m7_gap_mode'):
+            clear_ = max(g('m7_ack_gap_clear_m'), 0.109 + g('m7_margin_m') + 0.005)
+            lo_ = self.m7_lane_l(g('m7_lanes') - 1) - W / 2 + clear_
+            hi_ = self.m7_lane_l(0) + W / 2 - clear_
+            lid = (avoid.scan_boxes(self.scan_xy(), sc, lc, psi, reach=g('m7_gap_lidar_m')) if g('m7_gap_lidar') else [])
+            side_ = self.m2_side()
+            goal_ = None if side_ is None else (0 if side_ == 'A' else g('m7_lanes') - 1)
+            gp = gap_choice.choose_gap(boxes + lid, sc, sf, lc, psi, lo_, hi_, {
+                'clear': clear_, 'radius': g('ack_plan_radius_m'), 'horizon': g('m7_gap_horizon_m'),
+                'row_tol': g('m7_gap_row_tol_m'), 'buf': g('m7_gap_buf_m'), 'w_dir': g('m7_gap_w_dir'),
+                'w_next': g('m7_gap_w_next'), 'w_goal': g('m7_gap_w_goal'), 'hold_bonus': g('m7_gap_hold_m'),
+                'dir_deg': g('m7_gap_dir_deg'), 'slack': g('m7_gap_slack_m')},
+                prev=m.get('gap'), goal_l=None if goal_ is None else self.m7_lane_l(goal_))
+            if gp is not None and gp['lt'] is not None:
+                gap_res = gp
+                key = (round(gp['row_s'], 1), round(gp['lt'], 1))
+                if m.get('gap_logkey') != key:
+                    m['gap_logkey'] = key
+                    self.get_logger().info(
+                        f'[M7] 틈: 다음 줄 s {gp["row_s"]:.2f} (앞 {gp["d"]:.2f} m) → 옆 {gp["lt"]:+.2f} 틈 [{gp["gap"][0]:+.2f}, {gp["gap"][1]:+.2f}] '
+                        f'{gp["why"]} (지금 옆 {lc:+.2f}, 방향 {math.degrees(psi):+.0f}°, s {sc:.2f}) | 후보 '
+                        + ', '.join(f'[{c[2][0]:+.2f},{c[2][1]:+.2f}] {c[0]:.2f}' for c in gp['cands'][:4]))
+            elif gp is not None:
+                self.m7_mode('gapnone', f'틈: 다음 줄 s {gp["row_s"]:.2f} 에 빈 틈 없음 (s {sc:.2f})')
+            m['gap'] = gap_res
         # 3) 갈 차로 — 내 (목표) 차로가 m7_block_m 안에서 막히면. 변경 중이어도 막혔으면 (rechoose) 다시 고른다
         k = self.m7_k(m['n'])
         lt = self.m7_lane_l(k)
@@ -2050,7 +2090,7 @@ class MissionManager(Node):
         # 아커만: 목표 차로 안 (가운데에서 반 차로 안) 이면 '변경 중' 이어도 다음 장애물로 다시 고름 — 가운데에 18 cm 못 미친 채
         # '변경 중' 으로 남아 앞 장애물을 10 s 동안 무시하다 0.13 m 에서야 고름 → 꺾을 거리 없어 막힘 (실차 ack31)
         in_lane_now = self.ack() and g('m7_ack_choose_in_lane') and hold is None and abs(lc - lt) < W / 2
-        if o is not None and a_own < g('m7_block_m') and (not changing or rechoose or in_lane_now):
+        if gap_res is None and o is not None and a_own < g('m7_block_m') and (not changing or rechoose or in_lane_now):
             here = round((lc - m['grid']['phase']) / W)
             kh = self.m7_k(here)
             # 후보: 막은 장애물을 지나가는 구간 [앞면 − window, 뒷면 + 0.15] 이 비어 있는 옆 차로, 변경 중이면 지금 위치 차로도
@@ -2085,7 +2125,7 @@ class MissionManager(Node):
             elif rechoose:
                 self.get_logger().info(f'[M7] 다시 골랐지만 옆 차로가 막은 장애물 옆에서 비어 있지 않음 — 차로 {k} 유지 (s {sc:.2f} m) | {self.m7_dump()}')
         ahead_any = any(ahead(j) < math.inf for j in range(g('m7_lanes')))
-        if not changing and goal is not None and k != goal and ahead_any:
+        if gap_res is None and not changing and goal is not None and k != goal and ahead_any:
             # M2: 갈림길 쪽 옆 차로가 지금 차로만큼 비어 있으면 미리 그쪽으로. 앞에 장애물이 없으면 (분리대 옆) 안 옮김
             j = k + (1 if goal > k else -1)
             aj = ahead(j)
@@ -2095,7 +2135,14 @@ class MissionManager(Node):
                                        f'{"비어 있음" if a_own == math.inf else f"{a_own:.2f} m"}, 차로 {j} 앞 '
                                        f'{"비어 있음" if aj == math.inf else f"{aj:.2f} m"} (s {sc:.2f} m)')
                 k, lt, changing = j, self.m7_lane_l(j), True
-        if self.ack() and g('m7_ack_gap_target'):
+        if gap_res is not None:
+            # 틈 목표: 옆 목표 = 틈 안 점, 차로 번호는 그 점에 가장 가까운 차로 (끝내기·갈림길 판단용)
+            lt = gap_res['lt']
+            kk = min(max(int(round((lt - m['grid']['phase']) / W)), m['grid']['n_left'] - (g('m7_lanes') - 1)), m['grid']['n_left'])
+            m['n'] = kk
+            k = self.m7_k(kk)
+            changing = abs(lc - lt) > g('m7_lane_done_m')
+        elif self.ack() and g('m7_ack_gap_target'):
             lt = self.m7_gap_lt(sc, lc, k, lt, boxes)
             changing = abs(lc - lt) > g('m7_lane_done_m')
         m['lt'] = lt                       # 후진 때 가야 할 쪽 (m7_ack_back_toward)
