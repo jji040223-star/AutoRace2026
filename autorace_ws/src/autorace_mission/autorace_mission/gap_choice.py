@@ -64,9 +64,18 @@ def choose_gap(boxes, sc, sf, lc, psi, lo, hi, p, prev=None, goal_l=None):
     gaps = free_intervals(row, lo, hi, p['clear'])
     nxt = free_intervals(rows[1], lo, hi, p['clear']) if len(rows) > 1 else None
     cands = []
+    w_all = p.get('w_goal_all', 0.0)
+    pts = []
     for a, b in gaps:
         buf = min(p['buf'], (b - a) / 2)
-        t = min(max(lc, a + buf), b - buf)         # 그 틈에서 지금 옆과 가장 가까운 점
+        pts.append((a, b, buf, min(max(lc, a + buf), b - buf)))       # 그 틈에서 지금 옆과 가장 가까운 점
+        if w_all > 0 and goal_l is not None:
+            # 같은 틈 안 갈림길 쪽 점도 후보 (옛 차로 방식의 '갈림길 쪽 옆 차로가 비면 미리 옮김' — 시뮬 g1_h1_gap:
+            # 틈만 따라 왼쪽 끝으로 가서 B 로 두 칸 옮길 거리가 없었음)
+            tg = min(max(goal_l, a + buf), b - buf)
+            if abs(tg - pts[-1][3]) > 0.05:
+                pts.append((a, b, buf, tg))
+    for a, b, buf, t in pts:
         dl = t - lc
         need = s_curve_len(dl, p['radius'])
         # 차가 이미 그쪽으로 향해 있으면 필요한 길이가 줆 (향한 만큼 옆으로 감), 반대면 늚
@@ -81,12 +90,18 @@ def choose_gap(boxes, sc, sf, lc, psi, lo, hi, p, prev=None, goal_l=None):
             cost += p['w_next'] * dn
         elif goal_l is not None:
             cost += p['w_goal'] * abs(t - goal_l)
+        if w_all > 0 and goal_l is not None:
+            cost += w_all * abs(t - goal_l)        # 다음 줄이 있어도 갈림길 쪽 (m7_gap_w_goal_all, 기본 0 = 안 씀)
         feas = need <= d + p['slack']
         if not feas:
             cost += 10.0 + (need - d)              # 못 들어가는 틈은 맨 뒤 (그래도 다 못 들어가면 덜 못 들어가는 것)
         if prev is not None and abs(prev['row_s'] - row_s) < p['row_tol'] and a - 1e-3 <= prev['lt'] <= b + 1e-3:
-            cost -= p['hold_bonus']                # 고른 틈 유지
-            t = min(max(prev['lt'], a + buf), b - buf)
+            if w_all > 0 and goal_l is not None:
+                if abs(t - prev['lt']) < 0.08:
+                    cost -= p['hold_bonus']        # 고른 점 유지 (갈림길 쪽 점 후보가 있을 땐 점에 보너스, 점을 옮기지 않음)
+            else:
+                cost -= p['hold_bonus']            # 고른 틈 유지
+                t = min(max(prev['lt'], a + buf), b - buf)
         cands.append((cost, t, (a, b), feas, need))
     if not cands:
         return {'lt': None, 'gap': None, 'row_s': row_s, 'cands': [], 'why': '빈 틈 없음', 'd': d}

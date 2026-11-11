@@ -354,6 +354,7 @@ class MissionManager(Node):
         p('m7_gap_w_dir', 1.0)             #   차가 향한 쪽 반대 틈 벌점 [m / rad]
         p('m7_gap_dir_deg', 10.0)          #   이보다 덜 틀어졌으면 방향 벌점 없음
         p('m7_gap_w_next', 0.5)            #   다음 줄 틈과 어긋난 옆 거리 벌점 배율
+        p('m7_gap_w_goal_all', 0.0)        #   다음 줄이 있어도 갈림길 쪽 끝 차로와 옆 거리 벌점 (>1 이면 틈 안에서 갈림길 쪽으로 붙음, 0 = 안 씀)
         p('m7_gap_w_goal', 0.2)            #   (마지막 줄) 갈림길 쪽 끝 차로와 옆 거리 벌점 배율
         p('m7_gap_hold_m', 0.15)           #   지난번 고른 틈 유지 보너스 [m]
         p('m7_gap_slack_m', 0.10)          #   S 자 길이가 앞 거리 + 이것 안이면 들어간다고 봄
@@ -2023,7 +2024,8 @@ class MissionManager(Node):
                     return
         # 3a) 틈 고르기 (m7_gap_mode): 다음 줄 빈 틈 목표 — 켜져 있으면 아래 차로 고르기는 값만 계산하고 결정은 안 함
         gap_res = None
-        if self.ack() and g('m7_gap_mode'):
+        if self.ack() and g('m7_gap_mode') and m.get('final_k') is None:
+            # 끝내기 옮김 (갈림길 쪽) 이 시작되면 틈 고르기 안 함 — 지나는 중인 마지막 줄 틈이 그 목표를 덮어써 못 옮김 (시뮬 g0_h1_smoke)
             clear_ = max(g('m7_ack_gap_clear_m'), 0.109 + g('m7_margin_m') + 0.005)
             lo_ = self.m7_lane_l(g('m7_lanes') - 1) - W / 2 + clear_
             hi_ = self.m7_lane_l(0) + W / 2 - clear_
@@ -2033,7 +2035,7 @@ class MissionManager(Node):
             gp = gap_choice.choose_gap(boxes + lid, sc, sf, lc, psi, lo_, hi_, {
                 'clear': clear_, 'radius': g('ack_plan_radius_m'), 'horizon': g('m7_gap_horizon_m'),
                 'row_tol': g('m7_gap_row_tol_m'), 'buf': g('m7_gap_buf_m'), 'w_dir': g('m7_gap_w_dir'),
-                'w_next': g('m7_gap_w_next'), 'w_goal': g('m7_gap_w_goal'), 'hold_bonus': g('m7_gap_hold_m'),
+                'w_next': g('m7_gap_w_next'), 'w_goal': g('m7_gap_w_goal'), 'w_goal_all': g('m7_gap_w_goal_all'), 'hold_bonus': g('m7_gap_hold_m'),
                 'dir_deg': g('m7_gap_dir_deg'), 'slack': g('m7_gap_slack_m')},
                 prev=m.get('gap'), goal_l=None if goal_ is None else self.m7_lane_l(goal_))
             if gp is not None and gp['lt'] is not None:
@@ -2268,6 +2270,7 @@ class MissionManager(Node):
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
             # m7_final_two_lanes: 반대쪽 끝 차로 (두 칸) 면 한 칸씩 (실차 ack35: 맨 왼쪽에서 B 표지판을 늦게 봐 A 로 감)
             m['final_shift'] = not two
+            m['final_k'] = step_k
             m['n'], m['changes'] = m['grid']['n_left'] - step_k, m['changes'] + 1
             self.get_logger().info(f'[M7] 장애물 다 지남 — 갈림길 {side} 쪽 차로 {step_k} 로 옮긴 뒤 끝냄 (지금 차로 {k}, 목표 {goal}, s {sc:.2f} m)')
             return
