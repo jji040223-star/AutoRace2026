@@ -357,6 +357,7 @@ class MissionManager(Node):
         p('m7_line_fix_frames', 8)         # 이만큼 모이면 그 중앙값 × m7_line_fix_gain 만큼 격자를 옮김
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
+        p('m7_final_clear_ends', False)    # 끝내기 옮김 조건을 지금·갈림길 쪽 차로 앞만 보게 (실차 ack44, real_limo 에서 켬)
         p('m7_final_direct', False)        # 반대쪽 끝 차로면 갈림길 쪽 끝 차로로 한 번에 (실차 ack43, real_limo 에서 켬)
         p('m7_final_lock_ok', False)       # 갈림길 표지판 잠금 (분기점 가까움) 뒤에도 끝내기 옮김 (실차 ack43, real_limo 에서 켬)
         p('m7_final_two_lanes', False)     # 장애물 다 지났는데 갈림길 반대쪽 끝 차로 (두 칸) 면 한 칸씩 옮긴 뒤 끝냄 (실차 ack35)
@@ -2503,7 +2504,10 @@ class MissionManager(Node):
             # 두 칸이면 한 칸씩 말고 갈림길 쪽 끝 차로를 바로 목표 (S 자 하나 ~1.0 m vs 한 칸씩 ~1.8 m). 실차 11-11 ack43: s 3.83 에서
             # 한 칸 (가운데) 만 목표로 잡아 기준 S 자가 안 들어가고 6 m 에서 가운데로 끝남 → A 표지판인데 B 쪽 길 (다른 세션 제안)
             step_k, two = goal, False
-        if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and (abs(k - goal) == 1 or two)
+        # m7_final_clear_ends: 끝내기 옮김은 지금 차로·갈림길 쪽 차로 앞만 비면 시작 (사이 차로 앞 물체 — 분리대 맨 앞 갈림길 표지판 받침대 —
+        # 는 원호 계획이 매 순간 피함). 실차 11-11 ack44: s 3.65 에서 가운데 차로 앞 s 4.7~5.1 받침대 때문에 '모든 차로 1 m 빔' 이 끝까지 안 맞아 B 로 감
+        clear_f = (all(ahead(j) > g('m7_clear_m') for j in {k, goal}) if (g('m7_final_clear_ends') and goal is not None) else clear)
+        if (g('m7_final_to_goal') and not changing and clear_f and sc > 0.3 and goal is not None and (abs(k - goal) == 1 or two)
                 and not m.get('final_shift')
                 and (not self._m2['locked'] or g('m7_final_lock_ok') or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)
                                                 and (island or self.dist_from(self._m2.get('lock_pos')) < g('m7_ack_final_after_lock_m'))))

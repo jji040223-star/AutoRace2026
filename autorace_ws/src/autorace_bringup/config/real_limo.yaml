@@ -8,6 +8,7 @@ lane_follower:
   ros__parameters:
     camera_hfov_deg: 66.4               # camera_info fx 488.2 → 2·atan(320/488.2)
     camera_height: 0.190
+    stop_line_min_cov: 0.82             # 11-11 ack43·44: M3 횡단보도 앞 정지선이 덮는 비율 0.85~0.88 (M1 쪽은 0.92~0.99) 이라 0.9 에서 못 잡고 줄무늬 너머 선에 섬 → bag 재생으로 0.8 이면 0.50 m 부터 잡힘. 줄무늬 막대는 0.6
     camera_pitch_deg: 8.46
     camera_yaw_deg: 0.26
     yellow_hsv_lo: [10, 57, 133]        # 연습 트랙 노란 선 H 14–21, S 82–124, V 191–255 (매트 0 %)
@@ -82,6 +83,7 @@ mission_manager:
     small_queues: true                  # odom 큐 5·뎁스 장애물 큐 2 — 밀려도 늘 최신
     m7_final_direct: true               # 11-11 ack43: A 인데 오른쪽 끝에서 한 칸만 옮기다 가운데로 끝남 → 갈림길 쪽 끝 차로로 한 번에
     m7_final_lock_ok: true              # 11-11 ack43: 표지판 잠금 뒤에도 끝내기 옮김
+    m7_final_clear_ends: true           # 11-11 ack44: 분리대 맨 앞 표지판 받침대 때문에 끝내기 옮김을 못 함 → 지금·갈림길 쪽 차로 앞만 봄
     m7_back_grow: false                 #   늘리지 않음 (ack8·9: 0.45 m 까지 늘어 이전 구간까지 물러남)
     m8_back_m: 0.2                      # M8 후진도 0.2 (시뮬 0.10)
     m8_after_m7_m: 1.5                  # M7 끝 뒤 1.5 m 전엔 M8 안 켬 — ack18: 마지막 줄 흰 상자 다리 (라이다 높이) 를 라바콘 13 개로 봐 A 길에서 M8 → 코너 보조로 이탈
