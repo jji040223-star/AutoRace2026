@@ -357,6 +357,8 @@ class MissionManager(Node):
         p('m7_line_fix_frames', 8)         # 이만큼 모이면 그 중앙값 × m7_line_fix_gain 만큼 격자를 옮김
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
+        p('m7_final_direct', False)        # 반대쪽 끝 차로면 갈림길 쪽 끝 차로로 한 번에 (실차 ack43, real_limo 에서 켬)
+        p('m7_final_lock_ok', False)       # 갈림길 표지판 잠금 (분기점 가까움) 뒤에도 끝내기 옮김 (실차 ack43, real_limo 에서 켬)
         p('m7_final_two_lanes', False)     # 장애물 다 지났는데 갈림길 반대쪽 끝 차로 (두 칸) 면 한 칸씩 옮긴 뒤 끝냄 (실차 ack35)
         p('m7_gap_mode', False)            # 아커만 M7: 차로 번호 대신 다음 줄의 빈 틈을 목표로 (gap_choice.py, 실차 11-11). 끄면 옛 차로 고르기
         p('m7_gap_horizon_m', 2.5)         #   이 앞까지 상자를 줄로 묶어 봄
@@ -2497,9 +2499,13 @@ class MissionManager(Node):
         clear = all(ahead(j) > g('m7_clear_m') for j in range(g('m7_lanes')))
         two = g('m7_final_two_lanes') and goal is not None and abs(k - goal) == 2
         step_k = None if goal is None else (goal if not two else k + (1 if goal > k else -1))
+        if two and g('m7_final_direct'):
+            # 두 칸이면 한 칸씩 말고 갈림길 쪽 끝 차로를 바로 목표 (S 자 하나 ~1.0 m vs 한 칸씩 ~1.8 m). 실차 11-11 ack43: s 3.83 에서
+            # 한 칸 (가운데) 만 목표로 잡아 기준 S 자가 안 들어가고 6 m 에서 가운데로 끝남 → A 표지판인데 B 쪽 길 (다른 세션 제안)
+            step_k, two = goal, False
         if (g('m7_final_to_goal') and not changing and clear and sc > 0.3 and goal is not None and (abs(k - goal) == 1 or two)
                 and not m.get('final_shift')
-                and (not self._m2['locked'] or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)
+                and (not self._m2['locked'] or g('m7_final_lock_ok') or (self.ack() and g('m7_ack_final_ignore_lock') and self.not_at_edge(goal)
                                                 and (island or self.dist_from(self._m2.get('lock_pos')) < g('m7_ack_final_after_lock_m'))))
                 and window_free(step_k, sc - g('m7_enter_window_m'), sf + 0.6)):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
