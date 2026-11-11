@@ -2501,10 +2501,12 @@ class MissionManager(Node):
         clear = all(ahead(j) > g('m7_clear_m') for j in range(g('m7_lanes')))
         two = g('m7_final_two_lanes') and goal is not None and abs(k - goal) == 2
         step_k = None if goal is None else (goal if not two else k + (1 if goal > k else -1))
+        direct = False
         if two and g('m7_final_direct'):
             # 두 칸이면 한 칸씩 말고 갈림길 쪽 끝 차로를 바로 목표 (S 자 하나 ~1.0 m vs 한 칸씩 ~1.8 m). 실차 11-11 ack43: s 3.83 에서
-            # 한 칸 (가운데) 만 목표로 잡아 기준 S 자가 안 들어가고 6 m 에서 가운데로 끝남 → A 표지판인데 B 쪽 길 (다른 세션 제안)
-            step_k, two = goal, False
+            # 한 칸 (가운데) 만 목표로 잡아 기준 S 자가 안 들어가고 6 m 에서 가운데로 끝남 → A 표지판인데 B 쪽 길 (다른 세션 제안).
+            # two 는 아래 시작 조건 (abs == 1 or two) 에 그대로 써야 함 — 11-11 ack46 에서 two = False 로 바꿔 조건이 늘 거짓이 됨
+            step_k, direct = goal, True
         # m7_final_clear_ends: 끝내기 옮김은 지금 차로·갈림길 쪽 차로 앞만 비면 시작 (사이 차로 앞 물체 — 분리대 맨 앞 갈림길 표지판 받침대 —
         # 는 원호 계획이 매 순간 피함). 실차 11-11 ack44: s 3.65 에서 가운데 차로 앞 s 4.7~5.1 받침대 때문에 '모든 차로 1 m 빔' 이 끝까지 안 맞아 B 로 감
         clear_f = (all(ahead(j) > g('m7_clear_m') for j in {k, goal}) if (g('m7_final_clear_ends') and goal is not None) else clear)
@@ -2516,7 +2518,7 @@ class MissionManager(Node):
             # M2: 장애물을 다 지났는데 목표 차로 한 칸 옆 (= 가운데 차로, 분리대 끝으로 가는 차로) → 끝내기 전에 갈림길 쪽으로.
             #     분리대 위 표지판이 가까우면 (M2 잠금: 박스 m2_lock_box_px 이상) 분리대 옆이라 안 옮김
             # m7_final_two_lanes: 반대쪽 끝 차로 (두 칸) 면 한 칸씩 (실차 ack35: 맨 왼쪽에서 B 표지판을 늦게 봐 A 로 감)
-            m['final_shift'] = not two
+            m['final_shift'] = (not two) or direct
             m['final_k'] = step_k
             m['n'], m['changes'] = m['grid']['n_left'] - step_k, m['changes'] + 1
             self.get_logger().info(f'[M7] 장애물 다 지남 — 갈림길 {side} 쪽 차로 {step_k} 로 옮긴 뒤 끝냄 (지금 차로 {k}, 목표 {goal}, s {sc:.2f} m)')
