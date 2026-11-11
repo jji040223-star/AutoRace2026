@@ -33,6 +33,35 @@ def hits(poses, boxes, margins):
             & (np.abs(dx * c + dy * s) < a + hs * ac + hl * as_) & (np.abs(dy * c - dx * s) < b + hs * as_ + hl * ac))
 
 
+def hits_any(poses, boxes, margins):
+    """hits(...).any(axis=1) 와 같은 결과를 더 빨리: 차 원 (반 대각 + 여유) 과 상자 원이 안 겹치는 (자세, 상자) 쌍은 분리축 검사를 건너뜀.
+    M7 아커만 후보 자세 수천 개 × 상자 수십 개에서 대부분이 먼 쌍 (PC 프로파일: hits 가 m7_tick 의 85 %)."""
+    P = np.asarray(poses, float)
+    out = np.zeros(len(P), bool)
+    if len(boxes) == 0 or len(P) == 0:
+        return out
+    B = np.asarray(boxes, float)
+    mg = np.asarray(margins, float)
+    bc = np.stack([(B[:, 0] + B[:, 1]) / 2, (B[:, 2] + B[:, 3]) / 2], 1)
+    br = 0.5 * np.hypot(B[:, 1] - B[:, 0], B[:, 3] - B[:, 2])
+    cr = np.hypot(CAR_HALF_L + mg, CAR_HALF_W + mg)
+    d2 = (P[:, None, 0] - bc[None, :, 0]) ** 2 + (P[:, None, 1] - bc[None, :, 1]) ** 2
+    near = d2 < (br + cr)[None, :] ** 2
+    pi, bi = np.nonzero(near)
+    if len(pi) == 0:
+        return out
+    Pp, Bb, mm = P[pi], B[bi], mg[bi]
+    a, b = CAR_HALF_L + mm, CAR_HALF_W + mm
+    c, s = np.cos(Pp[:, 2]), np.sin(Pp[:, 2])
+    ac, as_ = np.abs(c), np.abs(s)
+    hs, hl = (Bb[:, 1] - Bb[:, 0]) / 2, (Bb[:, 3] - Bb[:, 2]) / 2
+    dx, dy = (Bb[:, 0] + Bb[:, 1]) / 2 - Pp[:, 0], (Bb[:, 2] + Bb[:, 3]) / 2 - Pp[:, 1]
+    h = ((np.abs(dx) < hs + a * ac + b * as_) & (np.abs(dy) < hl + a * as_ + b * ac)
+         & (np.abs(dx * c + dy * s) < a + hs * ac + hl * as_) & (np.abs(dy * c - dx * s) < b + hs * as_ + hl * ac))
+    out[pi[h]] = True
+    return out
+
+
 def margins(pose, boxes, margin):
     """상자별 여유: 그 자세에서 이미 여유 안에 든 상자 (옆을 바짝 지나는 중) 는 0 — 안 그러면 어느 방향으로도 못 간다."""
     mg = np.full(len(boxes), float(margin))

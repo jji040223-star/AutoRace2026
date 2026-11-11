@@ -62,6 +62,7 @@ FSM (v3 6장 "보이면 켜지고, 조건으로 끝난다"). 우선순위: 정�
 import bisect
 import collections
 import math
+import os
 import time
 import signal
 
@@ -109,7 +110,8 @@ class MissionManager(Node):
         p('scan_topic', '/scan')           # M7 후진 때 뒤쪽 확인
         p('laser_x', 0.103)                # base_link → 라이다 [m] (sensor_mounts laser_link)
         p('rate_hz', 20.0)
-        p('sensor_thread', False)          # odom·IMU·라이다를 따로 스레드에서 받음 (실차 M7 처리 지연, real_limo 에서 켬)
+        p('sensor_thread', False)
+        p('m7_ack_fast', False)            # M7 원호 121 조합을 자세표 한 번에 검사 (결과 같음, 처리 시간 ↓). real_limo 에서 켬          # odom·IMU·라이다를 따로 스레드에서 받음 (실차 M7 처리 지연, real_limo 에서 켬)
         # M5 서행 (방지턱)
         p('m5_labels', ['slow', 'speed_bump'])
         p('m5_min_conf', 0.5)
@@ -1559,6 +1561,7 @@ class MissionManager(Node):
         kmax = 1.0 / g('ack_plan_radius_m')
         K = np.linspace(-kmax, kmax, int(g('m7_ack_n')))
         d1, d2 = g('m7_ack_d1_m'), g('m7_ack_d2_m')
+        fast = g('m7_ack_fast')
         boxes = avoid.escape((sc, lc, psi), list(near)) or []   # 이미 닿은 상자 (기억 오차) 는 빼고 — 빠져나가는 길도 고르게
         # 이미 여유 (m7_margin_m) 안에 붙은 상자는 여유 0 — 일률 여유면 그 자리에서 어느 원호도 첫 자세부터 닿아 못 빠져나감
         # (2D 시뮬 11-09 e6: 목표 차로 옆 +0.43 까지 가서 모든 κ 빈 길이 0.00 → 후진 3 번 → 멈춤). 직선 검사 avoid.margins 와 같은 방식
@@ -1613,17 +1616,95 @@ class MissionManager(Node):
                     out_walls = list(funnel)  # ③: 두 바퀴 밖 구간이 짧은 쪽을 고르게 비용으로만
         best = None
         free1 = []
-        for k1 in K:
+        R_, w_lat, w_ref_head = g('ack_plan_radius_m'), g('m7_ack_w_lat'), g('m7_ack_w_ref_head')
+        w_out, w_head, w_free = g('m7_ack_w_out'), g('m7_ack_w_head'), g('m7_ack_w_free')
+
+        def bad_of(P, bx=None, mgx=None):
+            bx, mgx = (boxes, mg) if bx is None else (bx, mgx)
+            if not bx:
+                hit = np.zeros(len(P), bool)
+            elif fast:
+                hit = avoid.hits_any(P, bx, mgx)     # 먼 (자세, 상자) 쌍 건너뜀 — 결과 같음
+            else:
+                hit = avoid.hits(P, bx, mgx).any(axis=1)
+            bad = hit | (np.abs(P[:, 2]) > pmax)
+            if wheel_walls:
+                bad = bad | self.wheel_out(P, wheel_walls)
+            if outer_w and not out_start:
+                bad = bad | self.wheel_out(P, outer_w)
+            elif out_start:
+                bad = bad | (np.abs(P[:, 1] - lt) > abs(lc - lt) + 0.02)   # 목표 차로에서 더 멀어지지 않게
+            return bad
+        if fast:
+            # 처리 시간 (실차 M7 중 odom 15~30 Hz·뎁스 0.6 s 지연, PC 프로파일: m7_tick 45 ms 중 97 % 가 이 121 조합 루프 — hits·ack_poses·
+            # wheel_out 을 조합마다 따로 부름, 다른 세션 ③). 원호 모양은 (κ1, κ2, d1, d2) 에만 달려 차 기준 자세표를 한 번 만들어 두고
+            # 매 틱 회전·이동 → 모든 자세를 한 번에 검사. 결과는 옛 루프와 같음 (ackcmp.py 로 비교)
+            key_ = (tuple(np.round(K, 6)), d1, d2)
+            if getattr(self, '_ack_tab_key', None) != key_:
+                T_, D_ = [], None
+                for k1 in K:
+                    for k2 in K:
+                        P_, D_ = self.ack_poses(0.0, 0.0, 0.0, [(k1, d1), (k2, d2)])
+                        T_.append(P_)
+                self._ack_tab, self._ack_tab_D, self._ack_tab_key = np.array(T_), D_, key_
+            T_, D = self._ack_tab, self._ack_tab_D
+            nK, n_ = len(K), T_.shape[1]
+            c_, s_ = math.cos(psi), math.sin(psi)
+            PW = np.empty((nK * nK * n_, 3))
+            Tf = T_.reshape(-1, 3)
+            PW[:, 0] = sc + c_ * Tf[:, 0] - s_ * Tf[:, 1]
+            PW[:, 1] = lc + s_ * Tf[:, 0] + c_ * Tf[:, 1]
+            PW[:, 2] = psi + Tf[:, 2]
+            # 어느 후보 자세도 닿을 수 없는 먼 상자는 검사에서 뺌 (자세 중심은 차에서 경로 길이 d1 + d2 안, 차 사각형 반 대각 + 여유 0.25) — 결과 같음
+            reach_ = d1 + d2 + 0.25
+            keep_ = [i for i, b in enumerate(boxes)
+                     if math.hypot((b[0] + b[1]) / 2 - sc, (b[2] + b[3]) / 2 - lc) - 0.5 * math.hypot(b[1] - b[0], b[3] - b[2]) < reach_]
+            # 라이다 점 상자 (반 변 1 cm, 점마다 하나 — 수십~수백 개, PC 프로파일에서 hits 가 m7_tick 의 85 %) 는 2 cm 칸으로 묶음:
+            # 칸 상자 = 칸 + 1 cm 테두리라 원래 점 상자를 다 덮음 (결과가 바뀌면 최대 1 cm 더 조심하는 쪽). 여유 mg 는 칸 안 점들 중 작은 값
+            kb_, km_, cell_ = [], [], {}
+            for i in keep_:
+                b = boxes[i]
+                if b[1] - b[0] <= 0.021 and b[3] - b[2] <= 0.021:
+                    key2 = (math.floor((b[0] + b[1]) / 2 / 0.02), math.floor((b[2] + b[3]) / 2 / 0.02))
+                    cell_[key2] = min(cell_.get(key2, 1.0), float(mg[i]))
+                else:
+                    kb_.append(b)
+                    km_.append(float(mg[i]))
+            for (ci, cj), mv in cell_.items():
+                kb_.append((ci * 0.02 - 0.01, ci * 0.02 + 0.03, cj * 0.02 - 0.01, cj * 0.02 + 0.03))
+                km_.append(mv)
+            bad_all = bad_of(PW, kb_, np.array(km_)).reshape(nK, nK, n_)
+            has = bad_all.any(axis=2)
+            idx = np.argmax(bad_all, axis=2)
+            FL = np.where(has, D[idx] - D[0], D[-1])
+            OUT = self.wheel_out(PW, out_walls).reshape(nK, nK, n_).mean(axis=2) if out_walls else None
+            PW = PW.reshape(nK, nK, n_, 3)
+            mid = nK // 2
+            for i1, k1 in enumerate(K):
+                free1.append((k1, float(FL[i1, mid])))
+                for i2, k2 in enumerate(K):
+                    fl = float(FL[i1, i2])
+                    if fl < d1:
+                        continue
+                    se, le, pe = PW[i1, i2, -1] if not has[i1, i2] else PW[i1, i2, max(0, idx[i1, i2] - 1)]
+                    lp = le + math.copysign(R_ * (1.0 - math.cos(pe)), pe)
+                    if ref is not None:
+                        RP = ref[0]
+                        i_ = int(np.argmin(np.abs(RP[:, 0] - se)))
+                        lr, pr = (RP[i_, 1], RP[i_, 2]) if se <= RP[-1, 0] else (lt, 0.0)
+                        lpr = le + math.copysign(R_ * (1.0 - math.cos(pe - pr)), pe - pr)
+                        cost_lat = w_lat * abs(lpr - lr) + w_ref_head * abs(pe - pr)
+                    else:
+                        cost_lat = w_lat * abs(lp - lt)
+                    if OUT is not None:
+                        cost_lat += w_out * float(OUT[i1, i2]) * (d1 + d2)
+                    cost = (cost_lat + w_head * abs(pe) + w_free * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
+                    if best is None or cost < best[0]:
+                        best = (cost, k1, k2, fl)
+        for k1 in (() if fast else K):
             for k2 in K:
                 P, D = self.ack_poses(sc, lc, psi, [(k1, d1), (k2, d2)])
-                hit = avoid.hits(P, boxes, mg).any(axis=1) if boxes else np.zeros(len(P), bool)
-                bad = hit | (np.abs(P[:, 2]) > pmax)
-                if wheel_walls:
-                    bad = bad | self.wheel_out(P, wheel_walls)
-                if outer_w and not out_start:
-                    bad = bad | self.wheel_out(P, outer_w)
-                elif out_start:
-                    bad = bad | (np.abs(P[:, 1] - lt) > abs(lc - lt) + 0.02)   # 목표 차로에서 더 멀어지지 않게
+                bad = bad_of(P)
                 fl = float(D[np.argmax(bad)] - D[0]) if bad.any() else float(D[-1])
                 if k2 == K[len(K) // 2]:
                     free1.append((k1, fl))
@@ -1633,20 +1714,20 @@ class MissionManager(Node):
                 # 투영 옆 오차: 끝 자세에서 최소 반경으로 펴면 옆으로 R·(1 − cos ψ) 더 감 — 끝 방향 자체를 벌하면 S 자 가운데
                 # (방향이 클 수밖에 없음) 를 늘 손해로 봐서 '안 꺾는 쪽' 이 이김 (2D 시뮬 11-09 i1: +15° 로 들어와 왼쪽 차로로 가야 하는데
                 # 방향만 펴다 첫 줄 LIMO 에 비스듬히 끼임, 다른 세션 검토)
-                lp = le + math.copysign(g('ack_plan_radius_m') * (1.0 - math.cos(pe)), pe)
+                lp = le + math.copysign(R_ * (1.0 - math.cos(pe)), pe)
                 if ref is not None:
                     # 기준 S 자 위 같은 s 의 옆·방향을 목표로 (기준이 '아직 안 꺾을 때' 와 '지금 꺾을 때' 를 정함)
                     RP = ref[0]
                     i_ = int(np.argmin(np.abs(RP[:, 0] - se)))
                     lr, pr = (RP[i_, 1], RP[i_, 2]) if se <= RP[-1, 0] else (lt, 0.0)
-                    lpr = le + math.copysign(g('ack_plan_radius_m') * (1.0 - math.cos(pe - pr)), pe - pr)
-                    cost_lat = g('m7_ack_w_lat') * abs(lpr - lr) + g('m7_ack_w_ref_head') * abs(pe - pr)
+                    lpr = le + math.copysign(R_ * (1.0 - math.cos(pe - pr)), pe - pr)
+                    cost_lat = w_lat * abs(lpr - lr) + w_ref_head * abs(pe - pr)
                 else:
-                    cost_lat = g('m7_ack_w_lat') * abs(lp - lt)
+                    cost_lat = w_lat * abs(lp - lt)
                 if out_walls:
-                    cost_lat += g('m7_ack_w_out') * float(self.wheel_out(P, out_walls).mean()) * (d1 + d2)
-                cost = (cost_lat + g('m7_ack_w_head') * abs(pe)
-                        + g('m7_ack_w_free') * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
+                    cost_lat += w_out * float(self.wheel_out(P, out_walls).mean()) * (d1 + d2)
+                cost = (cost_lat + w_head * abs(pe)
+                        + w_free * (d1 + d2 - fl) + 0.05 * abs(k1 - k2))
                 if best is None or cost < best[0]:
                     best = (cost, k1, k2, fl)
         if best is None:
@@ -1792,6 +1873,8 @@ class MissionManager(Node):
         return self._scan[1], self._scan[2]
 
     def m7_publish(self, v, w):
+        if getattr(self, '_stopping', False):
+            v = w = 0.0                          # 종료 중: 일꾼 스레드에서 끝나는 틱이 주행 명령을 다시 내지 않게
         tw = Twist()
         tw.linear.x, tw.angular.z = float(v), float(w)
         self.drive_pub.publish(tw)
@@ -1861,12 +1944,16 @@ class MissionManager(Node):
         if g('m7_back_far_after') > 0 and count >= g('m7_back_far_after'):
             back_m = max(back_m, g('m7_back_far_m'))   # 같은 자리 n 번째부터 더 물러남 (실차 11-11 ack41: 0.2 m 로 22 번 같은 자리)
         m['back'] = {'from': self._pos, 't': now, 'm': back_m}
-        if self.ack() and g('m7_ack_back_fix') and m.get('last_back_m', 1.0) < 0.03:
-            m['back']['straighten'] = True   # 지난 후진이 3 cm 도 못 감 → 이번엔 같은 조향 말고 방향을 펴는 쪽으로
+        if self.ack() and g('m7_ack_back_fix'):
+            # 지난 후진이 3 cm 도 못 감 → 같은 조향 반복 말고: 1 번째 = 방향 펴기, 2 번째 = 반대쪽으로 앞머리, 3 번째 = 처음처럼 (다른 세션 검토:
+            # 펴기도 0 m 면 또 펴기 → B 단계와 같은 반복)
+            zb = m.get('zero_backs', 0) + 1 if m.get('last_back_m', 1.0) < 0.03 else 0
+            m['zero_backs'] = 0 if zb >= 3 else zb
+            m['back']['mode'] = {1: 'straighten', 2: 'flip'}.get(zb)
         scan_age = '' if self._scan is None else f', 스캔 나이 {now - self._scan[0]:.2f} s'
         self.get_logger().warn(f'[M7] 막힘: {reason} → 후진 {back_m:.2f} m (같은 자리 {count}/{g("m7_retry_max")} 번째, '
                                f'뒤 라이다 빈 거리 {"없음(라이다 안 들어옴)" if rf is None else f"{rf:.2f} m"}{scan_age}'
-                               f'{", 지난 후진 0 m → 방향 펴며 후진" if m["back"].get("straighten") else ""})')
+                               f'{ {"straighten": ", 지난 후진 0 m → 방향 펴며 후진", "flip": ", 0 m 두 번 → 반대쪽으로 앞머리"}.get(m["back"].get("mode"), "")})')
 
     def m7_tick(self, now):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
@@ -2040,7 +2127,10 @@ class MissionManager(Node):
                 w_b = 0.0
                 tl = m.get('lt')
                 side = 0 if tl is None or abs(tl - lc) < g('m7_lane_done_m') else (1 if tl > lc else -1)
-                straight_next = fix and bk.get('straighten')
+                straight_next = fix and bk.get('mode') == 'straighten'
+                if fix and bk.get('mode') == 'flip':
+                    side = -side if side != 0 else (-1 if psi > 0 else 1)
+                sb = False                       # 이번 틱 조향이 '펴기' (비례) 인가 — 고정 (latch) 하지 않음
                 if (self.ack() and g('m7_ack_back_toward') and side != 0 and side * psi < math.radians(g('m7_ack_back_toward_deg'))
                         and not straight_next):
                     # 아커만 3 점 회전: 후진하며 바퀴를 가야 할 쪽 반대로 → 앞머리가 가야 할 쪽으로 돎 (w 부호 = 앞머리 도는 쪽).
@@ -2055,7 +2145,10 @@ class MissionManager(Node):
                     # 바깥 벽 사이에 끼어 후진 3 번 모두 실패) → 후진하면서 차로 방향 쪽으로 편다 (후진이라 w 부호 = 방향 줄이는 쪽)
                     vb = g('m7_back_speed')
                     w_b = max(-vb / g('ack_plan_radius_m'), min(vb / g('ack_plan_radius_m'), -2.0 * vb * psi / 0.3))
-                if self.ack() and g('m7_ack_back_latch'):
+                    sb = True
+                    if fix and abs(psi) < math.radians(3.0):
+                        w_b = 0.0                # 다 폈으면 곧게 (고정하면 0° 를 지나쳐 반대로 꺾임 — 다른 세션 검토)
+                if self.ack() and g('m7_ack_back_latch') and not (fix and sb):
                     # 후진 한 번 동안 조향 고정 — 매 틱 다시 정하면 3 점 회전 (한쪽 끝) ↔ 펴기 (반대쪽) 가 옆 차이 경계에서 번갈아
                     # 바퀴가 좌우로 왔다 갔다 (실차 11-10 사용자)
                     if 'w' not in bk:
@@ -2069,8 +2162,8 @@ class MissionManager(Node):
                             self.get_logger().info(f'[M7] 후진 중 — 방향 {math.degrees(psi):+.0f}° 에 닿아 조향 풂')
                         bk['w'] = 0.0
                         w_b = 0.0
-                elif 'w' not in bk:
-                    bk['w'] = w_b
+                elif 'w' not in bk or (fix and sb):
+                    bk['w'] = w_b                # 노란 선 예측에 쓰는 조향 (펴기는 매 틱 바뀜)
                 self.m7_publish(-g('m7_back_speed'), w_b)
                 return
             m['back'] = None
@@ -3205,7 +3298,19 @@ class MissionManager(Node):
                 self.set_state('M3_GO', f'정지 {now - self._m3["still_t"]:.1f} s 뒤 발진')
         elif s == 'M7_AVOID':
             t0_ = time.perf_counter()
-            self.m7_tick(now)
+            prof_ = os.environ.get('M7_PROFILE')   # 시험용: m7_tick 프로파일을 이 파일로 (20 s 마다 덮어씀)
+            if prof_:
+                if not hasattr(self, '_m7_prof'):
+                    import cProfile
+                    self._m7_prof, self._m7_prof_t = cProfile.Profile(), now
+                self._m7_prof.enable()
+                self.m7_tick(now)
+                self._m7_prof.disable()
+                if now - self._m7_prof_t > 20.0:
+                    self._m7_prof_t = now
+                    self._m7_prof.dump_stats(prof_)
+            else:
+                self.m7_tick(now)
             # 처리 시간 진단 (실차 11-10·11: M7 중 뎁스 처리 0.6 s 늦고 오도메트리 수신 50 → 15~30 Hz — 한 스레드에서 m7_tick 이
             # 길어 구독 콜백이 밀리는 것으로 의심, 다른 세션). 5 s 마다 m7_tick 평균·최대 ms, 마지막 odom 나이
             dt_ = (time.perf_counter() - t0_) * 1000.0
@@ -3259,6 +3364,16 @@ def main():
     except KeyboardInterrupt:
         pass
     finally:
+        node._stopping = True
+        if node._sensor_thread:
+            try:
+                ex.shutdown(timeout_sec=1.0)
+            except Exception:
+                pass
+        try:
+            node.drive_pub.publish(Twist())      # 멈춤 명령 한 번
+        except Exception:
+            pass
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         node.destroy_node()
         rclpy.try_shutdown()
