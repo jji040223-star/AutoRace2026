@@ -62,6 +62,7 @@ FSM (v3 6장 "보이면 켜지고, 조건으로 끝난다"). 우선순위: 정�
 import bisect
 import collections
 import math
+import time
 import signal
 
 import numpy as np
@@ -72,6 +73,8 @@ from nav_msgs.msg import Odometry
 from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Imu, LaserScan
 from rclpy.node import Node
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+from rclpy.executors import MultiThreadedExecutor
 from rclpy.signals import SignalHandlerOptions
 from std_msgs.msg import Empty, String
 
@@ -106,6 +109,7 @@ class MissionManager(Node):
         p('scan_topic', '/scan')           # M7 후진 때 뒤쪽 확인
         p('laser_x', 0.103)                # base_link → 라이다 [m] (sensor_mounts laser_link)
         p('rate_hz', 20.0)
+        p('sensor_thread', False)          # odom·IMU·라이다를 따로 스레드에서 받음 (실차 M7 처리 지연, real_limo 에서 켬)
         # M5 서행 (방지턱)
         p('m5_labels', ['slow', 'speed_bump'])
         p('m5_min_conf', 0.5)
@@ -321,7 +325,8 @@ class MissionManager(Node):
         p('m7_ack_min_speed', 0.0)         # 아커만 M7 원호 전진 최저 속도 (0 = ack_min_speed 만). 실차 0.1 (ack10: 0.08 로 정지에서 출발 못 함)
         p('m7_ack_back_straighten', True)  # 아커만 후진 중 차로 방향 쪽으로 펴며 후진. False = 조향 0 으로 곧게 (실차 11-10: 조향이 13° 까지만 꺾여 펴는 효과 없음 — 사용자)
         p('m7_ack_back_toward', False)     # 아커만 후진: 가야 할 쪽 (목표 옆) 으로 앞머리가 돌게 반대 조향 (3 점 회전). 실차 켬
-        p('m7_ack_back_toward_deg', 35.0)  #   이미 그쪽으로 이만큼 틀어져 있으면 곧게 후진
+        p('m7_ack_back_toward_deg', 35.0)
+        p('m7_ack_back_fix', False)        # 아커만 후진 회복 (실차 ack41): 가상 벽 대신 바퀴 규칙, 0 m 후진 뒤 펴기, 후진 중 방향 상한. real_limo 에서 켬  #   이미 그쪽으로 이만큼 틀어져 있으면 곧게 후진
         p('m7_back_timeout_s', 4.0)        # m7_back_m 한 번 기준 (더 많이 물러날 때는 비례해서 늘림)
         p('m7_back_grow', True)            # 같은 자리 n 번째 막힘이면 m7_back_m × n 만큼 물러남
         p('m7_back_grow_max', 3)
@@ -363,6 +368,7 @@ class MissionManager(Node):
         p('m7_ack_entry_single_ahead_m', 0.7)  #   구간 시작 이만큼 앞까지 (차선 가운데 점은 차 앞 m7_line_fix_ahead_m 이라 코너 출구에서 켜지면 s 0.5 쯤, 시뮬 dbg_h1)
         p('m7_ack_entry_single_min', 3)       #   점 수 최소
         p('m7_ack_entry_single_deg', 35.0)    #   차선 방향 (차 기준) 이 이보다 크면 안 씀
+        p('m7_test_no_rear_lidar', False)  # 시뮬 시험 전용: 뒤 라이다 빈 거리를 늘 None 으로 (실차 ack41: 막힘 22 번 중 21 번 None)
         p('m7_test_grid_err_m', 0.0)       # 시뮬 시험 전용: 구조 격자를 실제보다 오른쪽에 둠 (+ m) — 실차 진입 옆 오차 8~25 cm 재현 (차가 실제로는 가운데 차로 중앙보다 오른쪽)
         p('m7_gap_w_goal_all', 0.0)        #   다음 줄이 있어도 갈림길 쪽 끝 차로와 옆 거리 벌점 (>1 이면 틈 안에서 갈림길 쪽으로 붙음, 0 = 안 씀)
         p('m7_gap_w_goal', 0.2)            #   (마지막 줄) 갈림길 쪽 끝 차로와 옆 거리 벌점 배율
@@ -535,10 +541,15 @@ class MissionManager(Node):
         self.cmd_pub = self.create_publisher(LaneCmd, g('lane_cmd_topic'), 10)
         self.create_subscription(DetectionArray, g('detections_topic'), self.on_detections, 10)
         self.create_subscription(LaneState, g('lane_state_topic'), self.on_lane_state, 20)
-        self.create_subscription(Odometry, g('odom_topic'), self.on_odom, 50)
+        # sensor_thread: odom·IMU·라이다는 따로 스레드에서 받음 (값 저장만) — M7 계산이 길어도 자세가 안 늦게 (실차 11-10·11: M7 중
+        # odom 수신 50 → 15~30 Hz, 뎁스 처리 0.6 s 늦어 상자를 0.6 s 전 자세로 놓음). 나머지 콜백은 주 스레드 하나에서 차례로
+        self._sensor_thread = bool(g('sensor_thread'))
+        self._odom_jump = None
+        sg = MutuallyExclusiveCallbackGroup() if self._sensor_thread else None
+        self.create_subscription(Odometry, g('odom_topic'), self.on_odom, 50, callback_group=sg)
         self.create_subscription(ObstacleArray, g('obstacles_topic'), self.on_obstacles, 10)
-        self.create_subscription(Imu, g('imu_topic'), self.on_imu, qos_profile_sensor_data)
-        self.create_subscription(LaserScan, g('scan_topic'), self.on_scan, qos_profile_sensor_data)
+        self.create_subscription(Imu, g('imu_topic'), self.on_imu, qos_profile_sensor_data, callback_group=sg)
+        self.create_subscription(LaserScan, g('scan_topic'), self.on_scan, qos_profile_sensor_data, callback_group=sg)
         self.create_subscription(PoseArray, g('cones_topic'), self.on_cones, 10)
         self.create_subscription(String, g('mux_selected_topic'), self.on_mux_selected, 20)
         self.create_subscription(TrafficLight, g('light_topic'), self.on_light, 10)
@@ -590,7 +601,7 @@ class MissionManager(Node):
 
     def pose_at(self, t):
         """시각 t 의 오도메트리 자세 (x, y, yaw) — 가장 가까운 기록. 없으면 지금."""
-        h = self._odom_hist
+        h = list(self._odom_hist)          # 다른 스레드 (sensor_thread) 가 추가하는 중에도 안전하게 복사본
         if not h:
             return (*self._pos, self._yaw) if self._pos else None
         i = bisect.bisect_left([e[0] for e in h], t)
@@ -632,8 +643,12 @@ class MissionManager(Node):
     def on_odom(self, msg):
         p = msg.pose.pose.position
         if self._pos is not None and math.dist(self._pos, (p.x, p.y)) > 0.5:
-            self._pos = None
-            self.reset_all(f'오도메트리가 {math.dist(self._odom_hist[-1][1:3], (p.x, p.y)) if self._odom_hist else 0:.2f} m 튐 — 리셋')
+            jump = math.dist(self._pos, (p.x, p.y))
+            if self._sensor_thread:
+                self._odom_jump = jump         # 센서 스레드: 리셋은 tick (주 스레드) 에서
+            else:
+                self._pos = None
+                self.reset_all(f'오도메트리가 {jump:.2f} m 튐 — 리셋')
         self._pos = (p.x, p.y)
         self._speed = math.hypot(msg.twist.twist.linear.x, msg.twist.twist.linear.y)
         self._yaw_rate = msg.twist.twist.angular.z
@@ -855,7 +870,7 @@ class MissionManager(Node):
     def rear_free(self):
         """라이다로 본 차 뒤 (차 폭 + 3 cm 통로) 의 빈 거리 [m]. 라이다가 없거나 0.5 s 넘게 끊겼으면 None."""
         now = self.get_clock().now().nanoseconds * 1e-9
-        if self._scan is None or now - self._scan[0] > 0.5:
+        if self._scan is None or now - self._scan[0] > 0.5 or self.get_parameter('m7_test_no_rear_lidar').value:
             return None
         _, x, y = self._scan
         sel = (x < -CAR_HALF_L) & (np.abs(y) < CAR_HALF_W + 0.03)
@@ -876,7 +891,7 @@ class MissionManager(Node):
         # 실차 11-10 ack17: M7 입구 뎁스 상자가 실제 1 줄 상자를 차 기준 약 +25° 돌린 자리 (라이다는 맞음) — 코너에서 오른쪽으로
         # ~4°/s 도는 중이라 약 6 s 묵은 자세를 쓴 것과 맞음 (다른 세션 분석). 원인 확인용으로 5 s 마다 최대값을 남김
         st = stamp_s(msg.header)
-        h_ = self._odom_hist
+        h_ = list(self._odom_hist)
         dt_h = min((abs(e[0] - st) for e in (h_[0], h_[-1])), default=0.0) if h_ and not (h_[0][0] <= st <= h_[-1][0]) else 0.0
         dg = self._obs_diag if hasattr(self, '_obs_diag') else None
         if dg is None:
@@ -1495,6 +1510,15 @@ class MissionManager(Node):
                         & (y[:, None] > W_[None, :, 2]) & (y[:, None] < W_[None, :, 3])).any(axis=1))
         return (ins[0] & ins[1]) | (ins[2] & ins[3])
 
+    @classmethod
+    def wheel_pen(cls, s_, l_, h_, lo, hi):
+        """한쪽 두 바퀴 (앞·뒤) 가 노란 선 밖으로 나간 깊이 [m] — 같은 쪽 두 바퀴 중 덜 나간 것, 양쪽 중 큰 것. 0 = 이탈 아님.
+        lo/hi = 오른쪽/왼쪽 노란 선 l (규정: 한쪽 두 바퀴가 선 밖이면 차로 이탈)"""
+        c, sn = math.cos(h_), math.sin(h_)
+        ls = [l_ + wx * sn + wy * c for wx, wy in cls.WHEELS]       # 앞왼, 뒤왼, 앞오, 뒤오
+        pen = lambda l: max(l - hi, lo - l, 0.0)                     # noqa: E731
+        return max(min(pen(ls[0]), pen(ls[1])), min(pen(ls[2]), pen(ls[3])))
+
     def m7_ack_ref(self, sc, lc, psi, lt, boxes, mg, wheel_walls=()):
         """기준 S 자: 지금 자세에서 곧게 a 만큼 → 목표 쪽 원호 (반경 R) → 반대 원호로 방향 0 → 0.3 m 곧게, 끝 옆 = lt.
         a 를 0 부터 0.05 씩 늘려 안 닿는 가장 이른 것 (다른 세션 설계 11-09: 끼는 이유는 결정보다 '꺾기 시작' 이 늦어서 —
@@ -1837,8 +1861,12 @@ class MissionManager(Node):
         if g('m7_back_far_after') > 0 and count >= g('m7_back_far_after'):
             back_m = max(back_m, g('m7_back_far_m'))   # 같은 자리 n 번째부터 더 물러남 (실차 11-11 ack41: 0.2 m 로 22 번 같은 자리)
         m['back'] = {'from': self._pos, 't': now, 'm': back_m}
+        if self.ack() and g('m7_ack_back_fix') and m.get('last_back_m', 1.0) < 0.03:
+            m['back']['straighten'] = True   # 지난 후진이 3 cm 도 못 감 → 이번엔 같은 조향 말고 방향을 펴는 쪽으로
+        scan_age = '' if self._scan is None else f', 스캔 나이 {now - self._scan[0]:.2f} s'
         self.get_logger().warn(f'[M7] 막힘: {reason} → 후진 {back_m:.2f} m (같은 자리 {count}/{g("m7_retry_max")} 번째, '
-                               f'뒤 라이다 빈 거리 {"없음(라이다 안 들어옴)" if rf is None else f"{rf:.2f} m"})')
+                               f'뒤 라이다 빈 거리 {"없음(라이다 안 들어옴)" if rf is None else f"{rf:.2f} m"}{scan_age}'
+                               f'{", 지난 후진 0 m → 방향 펴며 후진" if m["back"].get("straighten") else ""})')
 
     def m7_tick(self, now):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
@@ -1981,7 +2009,14 @@ class MissionManager(Node):
             bk = m['back']
             moved = self.dist_from(bk['from'])
             rf = self.rear_free()
-            mem = self.m7_free(sc, lc, psi, near, 0.06, -1.0)
+            fix = self.ack() and g('m7_ack_back_fix')
+            if fix:
+                # 실차 11-11 ack41: 56° 틀어진 자세에서 뒤 모서리가 이미 바깥 가상 벽 안 → 뒤 라이다가 None 이면 그 벽이 '뒤 기억 장애물'
+                # 로 후진을 막아 0.00 m 물러남 12 번. 후진은 실제 상자 (뎁스 기억·라이다) 로만 막고, 노란 선은 바퀴 규칙으로 따로 (아래)
+                wl = set(walls) | set(funnel)
+                mem = self.m7_free(sc, lc, psi, [b for b in near if b not in wl], 0.06, -1.0)
+            else:
+                mem = self.m7_free(sc, lc, psi, near, 0.06, -1.0)
             bm = bk.get('m', g('m7_back_m'))
             # 아커만: 뒤 라이다가 비었으면 뒤 기억 장애물 (뎁스 기억 — 지나온 상자가 크게 남음) 로는 후진을 안 멈춤. 아커만은 제자리 회전이
             # 없어 후진이 유일한 회복인데, 0 cm 도 못 물러나고 같은 회복을 3 번 반복해 멈춤 (2D 시뮬 11-09 x5_4, 다른 세션)
@@ -1991,12 +2026,23 @@ class MissionManager(Node):
                    else '시간 초과' if now - bk['t'] > g('m7_back_timeout_s') * bm / g('m7_back_m')
                    else f'뒤 라이다 {rf:.2f} m' if rf is not None and rf < g('m7_back_lidar_m')
                    else '뒤 기억 장애물' if mem_block else None)
+            if fix and why is None and 'w' in bk and outer:
+                # 노란 선: 다음 5 cm 후진이 같은 쪽 두 바퀴를 선 밖으로 새로 내보내거나 더 깊이 넣으면 멈춤 (나오는 쪽은 허용)
+                lo_y, hi_y = outer[1][3], outer[0][2]
+                ds, vb_ = 0.05, g('m7_back_speed')
+                h2 = psi + bk['w'] * ds / vb_            # 후진이어도 w 부호 = 앞머리 도는 쪽
+                s2, l2 = sc - ds * math.cos(psi), lc - ds * math.sin(psi)
+                p0, p1 = self.wheel_pen(sc, lc, psi, lo_y, hi_y), self.wheel_pen(s2, l2, h2, lo_y, hi_y)
+                if p1 > 0.0 and p1 > p0 + 1e-3:
+                    why = f'노란 선 (바퀴 {p1 * 100:.0f} cm 밖으로)'
             if why is None:
                 self.m7_mode('back', '후진 중')
                 w_b = 0.0
                 tl = m.get('lt')
                 side = 0 if tl is None or abs(tl - lc) < g('m7_lane_done_m') else (1 if tl > lc else -1)
-                if self.ack() and g('m7_ack_back_toward') and side != 0 and side * psi < math.radians(g('m7_ack_back_toward_deg')):
+                straight_next = fix and bk.get('straighten')
+                if (self.ack() and g('m7_ack_back_toward') and side != 0 and side * psi < math.radians(g('m7_ack_back_toward_deg'))
+                        and not straight_next):
                     # 아커만 3 점 회전: 후진하며 바퀴를 가야 할 쪽 반대로 → 앞머리가 가야 할 쪽으로 돎 (w 부호 = 앞머리 도는 쪽).
                     # 곧게 후진하면 각이 안 바뀌어 같은 자리에서 같은 판단 반복 (실차 11-10 ack10, 사용자 제안). 반경 0.95 로 0.2 m 면 ~12°
                     vb = g('m7_back_speed')
@@ -2004,7 +2050,7 @@ class MissionManager(Node):
                     if not bk.get('turn_logged'):
                         bk['turn_logged'] = True
                         self.get_logger().info(f'[M7] 후진 중 — 앞머리를 {"왼" if side > 0 else "오른"}쪽으로 돌림 (목표 옆 {tl:+.2f}, 지금 {lc:+.2f}, 방향 {math.degrees(psi):+.0f}°)')
-                elif self.ack() and g('m7_ack_back_straighten'):
+                elif self.ack() and (g('m7_ack_back_straighten') or straight_next):
                     # 아커만: 곧게 후진하면 방향이 그대로라 같은 자리에 다시 낀다 (2D 시뮬 11-09 c3: 14° 틀어진 채 첫 줄 LIMO 와
                     # 바깥 벽 사이에 끼어 후진 3 번 모두 실패) → 후진하면서 차로 방향 쪽으로 편다 (후진이라 w 부호 = 방향 줄이는 쪽)
                     vb = g('m7_back_speed')
@@ -2015,9 +2061,20 @@ class MissionManager(Node):
                     if 'w' not in bk:
                         bk['w'] = w_b
                     w_b = bk['w']
+                if fix and bk.get('w', 0.0) != 0.0 and not straight_next:
+                    # 고정한 3 점 회전 조향이라도 앞머리가 m7_ack_back_toward_deg 에 닿으면 그 자리에서 풂 (ack41: 시작 때만 봐서 +1° → +56°)
+                    if math.copysign(1.0, bk['w']) * psi >= math.radians(g('m7_ack_back_toward_deg')):
+                        if not bk.get('cap_logged'):
+                            bk['cap_logged'] = True
+                            self.get_logger().info(f'[M7] 후진 중 — 방향 {math.degrees(psi):+.0f}° 에 닿아 조향 풂')
+                        bk['w'] = 0.0
+                        w_b = 0.0
+                elif 'w' not in bk:
+                    bk['w'] = w_b
                 self.m7_publish(-g('m7_back_speed'), w_b)
                 return
             m['back'] = None
+            m['last_back_m'] = moved
             m['rechoose'] = True
             m['probe_req'] = bool(g('m7_probe')) and not self.ack()   # 탐색은 제자리에서 돌아 방향을 잡음 — 아커만은 생략
             self.get_logger().info(f'[M7] 후진 {why}: {moved:.2f} m 물러남 → '
@@ -3081,6 +3138,9 @@ class MissionManager(Node):
     def tick(self):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         now = self.get_clock().now().nanoseconds * 1e-9
+        if self._odom_jump is not None:      # sensor_thread: 센서 스레드가 본 odom 튐을 주 스레드에서 리셋
+            jump, self._odom_jump = self._odom_jump, None
+            self.reset_all(f'오도메트리가 {jump:.2f} m 튐 — 리셋')
         cmd = LaneCmd(follow='both')
         s = self.state
         a = self._m5_arm
@@ -3144,7 +3204,19 @@ class MissionManager(Node):
                 self._m3_stop_pose = (self._pos[0], self._pos[1], self.heading())
                 self.set_state('M3_GO', f'정지 {now - self._m3["still_t"]:.1f} s 뒤 발진')
         elif s == 'M7_AVOID':
+            t0_ = time.perf_counter()
             self.m7_tick(now)
+            # 처리 시간 진단 (실차 11-10·11: M7 중 뎁스 처리 0.6 s 늦고 오도메트리 수신 50 → 15~30 Hz — 한 스레드에서 m7_tick 이
+            # 길어 구독 콜백이 밀리는 것으로 의심, 다른 세션). 5 s 마다 m7_tick 평균·최대 ms, 마지막 odom 나이
+            dt_ = (time.perf_counter() - t0_) * 1000.0
+            td = self.__dict__.setdefault('_tick_diag', {'t': now, 'n': 0, 'sum': 0.0, 'max': 0.0})
+            td['n'] += 1; td['sum'] += dt_; td['max'] = max(td['max'], dt_)   # noqa: E702
+            if now - td['t'] >= 5.0:
+                h_ = list(self._odom_hist)
+                oage = (now - h_[-1][0]) if h_ else -1.0
+                self.get_logger().info(f'[M7] 처리 시간: m7_tick 평균 {td["sum"] / td["n"]:.1f} ms, 최대 {td["max"]:.1f} ms '
+                                       f'({td["n"]} 번 / 5 s, 목표 {self.get_parameter("rate_hz").value:.0f} Hz), 마지막 odom 나이 {oage:.2f} s')
+                self._tick_diag = {'t': now, 'n': 0, 'sum': 0.0, 'max': 0.0}
         elif s == 'M8_AVOID':
             self.m8_tick(now)
         elif s == 'DONE':
@@ -3178,7 +3250,12 @@ def main():
     rclpy.init(signal_handler_options=SignalHandlerOptions.NO)
     node = MissionManager()
     try:
-        rclpy.spin(node)
+        if node._sensor_thread:
+            ex = MultiThreadedExecutor(num_threads=2)
+            ex.add_node(node)
+            ex.spin()
+        else:
+            rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:
