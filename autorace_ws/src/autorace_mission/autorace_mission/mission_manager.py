@@ -169,6 +169,11 @@ class MissionManager(Node):
         p('m7_entry_lane', 1)              # M7 에 들어갈 때 차로 (0 = 맨 왼쪽). 입구는 한 차로가 가운데 차로로 이어지는 구조 → 차 위치로
                                            # 격자를 바로 고정. −1 = 예전처럼 정차 LIMO 위치로 추측 (실차 11-06: 트랙 밖 유리벽을 LIMO 로 세어
                                            # 격자가 한 칸 밀림 → 빈 오른쪽 차로를 없는 차로로 봄, 3 번 중 2 번)
+        p('m7_entry_from_m3', False)       # M7 격자: 바로 전 M3 정지 자세 (정지선 위, 곧게) 에서 온 거리로 가운데 차로 위치를 잼 (트랙 도면 고정).
+        #                                    진입은 코너 안이라 다른 보정 표본이 0 개 → '차 = 가운데 차로 가운데' 가정이 8~18 cm 틀림 (실차 ack31·32·35, 2D 시뮬 r1)
+        p('m7_m3_to_mid_m', 1.70)          #   M3 정지 자세 (base) → 가운데 차로 가운데선, M3 진행 방향 거리 [m] (2D 시뮬 = 대회 도면 1.692~1.704)
+        p('m7_m3_max_dist_m', 4.0)         #   M3 정지 자세에서 이보다 멀리서 M7 이 켜지면 안 씀 (다른 곳 M3)
+        p('m7_m3_max_corr_m', 0.35)        #   구한 가운데 차로 옆 거리가 이보다 크면 안 씀
         p('m7_entry_center_fix', False)    # 진입 직전 1차로 차선 가운데 (lane_follower) 로 격자 가운데 맞춤
         p('m7_entry_center_back_m', 1.2)   #   진입점 뒤 이 거리 안에서 잰 점만
         p('m7_entry_center_max_m', 0.15)   #   이보다 크게 벗어났다고 나오면 안 씀 (차선 오인식)
@@ -485,6 +490,7 @@ class MissionManager(Node):
                      'dirs': collections.deque(maxlen=60), 'seen_at': None}   # M7 없이 M2 (m2_without_m7)
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
         self._bar_pt = None                               # M7 전에 본 3차선 입구 흰 가로선 (odom)
+        self._m3_stop_pose = None                         # M3 정지선에 완전히 선 자세 (x, y, yaw) — M7 격자 기준 (m7_entry_from_m3)
         self._last_pair = None                            # 마지막 차선 쌍 프레임 (시각, 차로 가운데 옆 거리, 차선 방향) — 아커만 M7 격자
         self._ys = collections.deque(maxlen=12)          # 최근 (차선 찾음, yellow_side) — 잠금 뒤 차로 옮기기 전 확인
         self._entry_ctr = collections.deque(maxlen=60)   # 위 점 중 곧고 두 선이 평행한 장면만 (3차선 입구 앞 1차로) — M7 격자 기준
@@ -1153,7 +1159,19 @@ class MissionManager(Node):
             ctr = 0.0
             how = f'들어간 자리 = 차로 {int(g("m7_entry_lane"))} (트랙 구조)'
             ef = None
-            if g('m7_entry_fix'):
+            mp = self._m3_stop_pose
+            if g('m7_entry_from_m3') and mp is not None and math.dist(self._pos, mp[:2]) <= g('m7_m3_max_dist_m'):
+                # M3 진행 방향 f 로 가운데 차로 가운데선까지 남은 거리 D, 그 선은 차로 방향과 직각이므로 차로 좌표 옆 (+ = 왼쪽) = D · (f · n)
+                fx, fy = math.cos(mp[2]), math.sin(mp[2])
+                D = g('m7_m3_to_mid_m') - ((self._pos[0] - mp[0]) * fx + (self._pos[1] - mp[1]) * fy)
+                ax_ = self._m7['axis']
+                ph = D * (fx * -math.sin(ax_) + fy * math.cos(ax_))
+                if abs(ph) <= g('m7_m3_max_corr_m'):
+                    ef = ctr = ph
+                    how += f', M3 정지 자세에서 온 거리로 가운데 차로 {ph * 100:+.1f} cm 로 맞춤 (M3 → 남은 {D:.2f} m)'
+                else:
+                    how += f', M3 정지 자세로 잰 가운데 차로 {ph * 100:+.1f} cm — 너무 커서 안 씀'
+            if ef is None and g('m7_entry_fix'):
                 # 3차선 입구 앞 1차로 (노란 선 양쪽, 곧고 평행) 에서 잰 차선 가운데 → 가운데 차로 중심. 깔때기에서 왼쪽으로 쏠린 뒤
                 # M7 이 켜져도 맞는 자리를 안다 (2D 시뮬 11-09: 8 번 중 2–3 번 0.35–0.4 m 왼쪽에서 켜져 격자가 반 차로 밀림 → 갈림길 실패·유리벽)
                 pts = [self.m7_frame(q) for q in self._entry_ctr]
@@ -3010,6 +3028,7 @@ class MissionManager(Node):
             if 'still_t' in self._m3 and now - self._m3['still_t'] >= g('m3_wait_s'):
                 cmd.stop = False
                 self._m3['go_from'] = self._pos
+                self._m3_stop_pose = (self._pos[0], self._pos[1], self.heading())
                 self.set_state('M3_GO', f'정지 {now - self._m3["still_t"]:.1f} s 뒤 발진')
         elif s == 'M7_AVOID':
             self.m7_tick(now)

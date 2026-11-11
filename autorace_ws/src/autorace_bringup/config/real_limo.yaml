@@ -36,6 +36,7 @@ lidar_processor:
     tall_cam_vfov_deg: 46.8             # 화면 위 끝 = 2·atan(cy 211.3 / fy 488.2) (영상 중심이 위로 치우쳐 있어 실제 세로 화각 52.4° 대신)
 mission_manager:
   ros__parameters:
+    m7_entry_from_m3: true              # M7 격자 가운데 차로를 M3 정지 자세에서 온 거리로 (진입 코너 안 — 8~18 cm 틀리던 것, 2D 시뮬 r1·실차 ack31·32·35)
     m7_final_two_lanes: true            # 갈림길 표지판 반대쪽 끝 차로에서 장애물 다 지나면 한 칸씩 갈림길 쪽으로 (ack35: B 인데 맨 왼쪽 → A)
     m1_line_extra_m: 0.04               # 신호등 앞 횡단보도 정지선: 오도메트리로는 바퀴가 선 위 (−0.5~−1.5 cm) 인데 실제로는 선 앞에 섬 (사용자 11-10) → 4 cm 더
     m7_lane_margin_m: 0.0               # 장애물이 차로에 조금이라도 걸치면 그 차로를 막은 것으로 (ack35: 6 cm 걸친 둘째 줄 상자를 1 cm 차로 늦게 알아챔 → 0.22 m 에서 막힘). 기본 0.05
