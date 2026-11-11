@@ -450,6 +450,7 @@ class MissionManager(Node):
         p('m1_stop_frames', 3)             # 통과 중 크기 확인한 노랑·빨강 이만큼 (초록 없이) → 다시 섬
         p('m1_go_speed', 0.15)             # 초록 보고 통과할 때도 정지선을 지날 때까지 이 속도 (서행 — 그 사이 노랑이 되면 정지선에 설 수 있게)
         p('m1_log_s', 2.0)
+        p('m1_near_ok_after_far', False)   # 먼 선을 지나친 뒤 처음 보이는 선은 min_gap 보다 가까워도 정지선 (실차 ack41, real_limo 에서 켬)
         p('m1_line_min_gap_m', 0.4)        # 신호등 앞 이보다 가까운 가로선 (횡단보도 먼 쪽 줄) 은 무시
         p('m1_lost_go_s', 10.0)            # 정지 뒤 신호등 색이 이만큼 안 보이면 출발 (빨강·노랑이 보이는 동안은 계속 기다림). 0 = 끔
         p('m1_line_extra_m', 0.0)          # M1 정지 목표만 이만큼 더 앞으로 [m] (실차 보정)
@@ -2978,6 +2979,14 @@ class MissionManager(Node):
             if n == 0:
                 self.get_logger().info(f'[M1] 신호등 {gap:.2f} m 앞 가로선은 지나감 (서행 구간 정지선 — {g("m1_line_max_gap_m")} m 안 선에만 섬)')
             return False
+        if gap < g('m1_line_min_gap_m') and g('m1_near_ok_after_far') and m.get('far_n', 0) > 0 and not m.get('near_ok_logged'):
+            # 먼 선 (서행 구간 선) 을 지나친 뒤 처음 보이는 선은 너무 가까워 보여도 정지선 — 신호등 상자 크기 거리가 짧게 나오면
+            # 진짜 정지선이 '횡단보도 먼 쪽 줄' 로 보여 버려짐 (실차 11-11 ack41: 첫 선 지나고 1.5 m 뒤 선을 0.14 m 로 계산해 안 섬)
+            m['near_ok_logged'] = True
+            self.get_logger().info(f'[M1] 신호등 {gap:.2f} m 앞 가로선 — 가깝게 보이지만 먼 선을 지난 뒤 첫 선이라 정지선으로 씀')
+            return True
+        if gap < g('m1_line_min_gap_m') and m.get('near_ok_logged'):
+            return True
         if gap < g('m1_line_min_gap_m'):
             # 신호등에 너무 가까운 선 = 횡단보도 먼 쪽 줄 — 진짜 정지선은 이미 카메라 앞 사각으로 지나감. 여기 서면 신호등이 화각 밖
             # (2D 시뮬 11-10 xab1: 늦게 시작해 x 3.58 에 섬, 신호등 방위 −42° → 박스 0 — 다른 세션). 크기 거리 ±25 % 라 넉넉히
