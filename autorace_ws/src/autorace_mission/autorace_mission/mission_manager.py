@@ -354,6 +354,13 @@ class MissionManager(Node):
         p('m7_gap_w_dir', 1.0)             #   차가 향한 쪽 반대 틈 벌점 [m / rad]
         p('m7_gap_dir_deg', 10.0)          #   이보다 덜 틀어졌으면 방향 벌점 없음
         p('m7_gap_w_next', 0.5)            #   다음 줄 틈과 어긋난 옆 거리 벌점 배율
+        p('m7_ack_entry_cam_single', False)  # 아커만 M7 진입 격자: 차선 쌍이 없으면 한쪽 선 프레임으로 잰 가운데 (실차 ack39: 진입 때 늘 한쪽 선만, 보정 표본 0 개)
+        p('m7_ack_entry_single_age_s', 1.5)   #   최근 이 시간 안 프레임
+        p('m7_ack_entry_single_back_m', 0.3)  #   구간 시작 이만큼 뒤까지 (더 뒤는 코너라 직선 차로 가운데와 어긋남)
+        p('m7_ack_entry_single_ahead_m', 0.7)  #   구간 시작 이만큼 앞까지 (차선 가운데 점은 차 앞 m7_line_fix_ahead_m 이라 코너 출구에서 켜지면 s 0.5 쯤, 시뮬 dbg_h1)
+        p('m7_ack_entry_single_min', 3)       #   점 수 최소
+        p('m7_ack_entry_single_deg', 35.0)    #   차선 방향 (차 기준) 이 이보다 크면 안 씀
+        p('m7_test_grid_err_m', 0.0)       # 시뮬 시험 전용: 구조 격자를 실제보다 오른쪽에 둠 (+ m) — 실차 진입 옆 오차 8~25 cm 재현 (차가 실제로는 가운데 차로 중앙보다 오른쪽)
         p('m7_gap_w_goal_all', 0.0)        #   다음 줄이 있어도 갈림길 쪽 끝 차로와 옆 거리 벌점 (>1 이면 틈 안에서 갈림길 쪽으로 붙음, 0 = 안 씀)
         p('m7_gap_w_goal', 0.2)            #   (마지막 줄) 갈림길 쪽 끝 차로와 옆 거리 벌점 배율
         p('m7_gap_hold_m', 0.15)           #   지난번 고른 틈 유지 보너스 [m]
@@ -506,6 +513,7 @@ class MissionManager(Node):
         self._lane_dirs = collections.deque(maxlen=60)   # 최근 (차 yaw + 차선 방향) — 노란 선을 잡은 프레임만
         self._bar_pt = None                               # M7 전에 본 3차선 입구 흰 가로선 (odom)
         self._m3_stop_pose = None                         # M3 정지선에 완전히 선 자세 (x, y, yaw) — M7 격자 기준 (m7_entry_from_m3)
+        self._one_ctr = collections.deque(maxlen=40)     # 한쪽 선만 잡은 프레임 (시각, 차로 가운데 odom 점, 차선 방향) — 아커만 M7 격자 (m7_ack_entry_cam_single)
         self._last_pair = None                            # 마지막 차선 쌍 프레임 (시각, 차로 가운데 옆 거리, 차선 방향) — 아커만 M7 격자
         self._ys = collections.deque(maxlen=12)          # 최근 (차선 찾음, yellow_side) — 잠금 뒤 차로 옮기기 전 확인
         self._entry_ctr = collections.deque(maxlen=60)   # 위 점 중 곧고 두 선이 평행한 장면만 (3차선 입구 앞 1차로) — M7 격자 기준
@@ -737,6 +745,15 @@ class MissionManager(Node):
             self._last_pair = (self.get_clock().now().nanoseconds * 1e-9, float(msg.center_offset_m), float(msg.lane_heading_rad))
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self._lane = msg
+        if msg.found and msg.yellow_side in (-1, 1) and abs(msg.lane_heading_rad) < math.radians(g('m7_ack_entry_single_deg')):
+            # 한쪽 선만 (코너를 나오며 M7 에 들어갈 때 실차는 늘 이 상태, ack39: 횡단보도 뒤 5 s 동안 nl 1) — lane_follower 가 그 선 + 학습 폭으로 잰 가운데
+            pose = self.pose_at(stamp_s(msg.header))
+            if pose is not None:
+                px, py, yw = pose
+                ah, off = g('m7_line_fix_ahead_m'), msg.center_offset_m
+                self._one_ctr.append((self.get_clock().now().nanoseconds * 1e-9,
+                                      (px + ah * math.cos(yw) - off * math.sin(yw), py + ah * math.sin(yw) + off * math.cos(yw)),
+                                      float(msg.lane_heading_rad)))
         if msg.yellow_side != 0 and 0.0 < msg.line_resid_px < g('m6_resid_off'):
             pose = self.pose_at(stamp_s(msg.header))
             if pose is not None:
@@ -1173,6 +1190,7 @@ class MissionManager(Node):
             # 들어와 격자가 밀리고 옆 차로 LIMO 가 경계에 걸친 것처럼 보였다 (실차 11-06 full10: 노란 선 보정이 나중에 +6.5 cm)
             ctr = 0.0
             how = f'들어간 자리 = 차로 {int(g("m7_entry_lane"))} (트랙 구조)'
+            measured = False
             ef = None
             mp = self._m3_stop_pose
             if g('m7_entry_from_m3') and mp is not None and math.dist(self._pos, mp[:2]) <= g('m7_m3_max_dist_m'):
@@ -1231,11 +1249,32 @@ class MissionManager(Node):
                     c_ = lp[1] * math.cos(lp[2])
                     if abs(c_) <= g('m7_ack_entry_cam_max_m'):
                         ctr = c_
+                        measured = True
                         how += f', 카메라 차선 가운데 {c_ * 100:+.1f} cm 로 맞춤 (아커만, {now_ - lp[0]:.2f} s 전 쌍 프레임)'
                     else:
                         how += f', 카메라 차선 가운데 {c_ * 100:+.1f} cm — 너무 커서 안 씀'
                 else:
                     how += ', 카메라 차선 쌍 프레임 없음 (0.5 s 안)'
+                if not measured and g('m7_ack_entry_cam_single'):
+                    # 한쪽 선 프레임: 최근 m7_ack_entry_single_age_s 안, 구간 시작 근처 (s −back~+0.4) 의 차로 가운데 점 l 중앙값
+                    now_ = self.get_clock().now().nanoseconds * 1e-9
+                    pts = [self.m7_frame(q[1]) for q in self._one_ctr if now_ - q[0] <= g('m7_ack_entry_single_age_s')]
+                    ls = sorted(l for s_, l in pts if -g('m7_ack_entry_single_back_m') <= s_ <= g('m7_ack_entry_single_ahead_m'))
+                    if len(ls) >= g('m7_ack_entry_single_min'):
+                        med = ls[len(ls) // 2]
+                        if abs(med) <= g('m7_ack_entry_cam_max_m'):
+                            ctr = med
+                            measured = True
+                            how += f', 한쪽 선으로 잰 차선 가운데 {med * 100:+.1f} cm 로 맞춤 ({len(ls)} 점, 흩어짐 {(ls[-1] - ls[0]) * 100:.0f} cm)'
+                        else:
+                            how += f', 한쪽 선으로 잰 차선 가운데 {med * 100:+.1f} cm — 너무 커서 안 씀'
+                    else:
+                        how += (f', 한쪽 선 프레임 {len(ls)} 개 — 부족해 안 맞춤 (최근 {len(pts)} 개, 전체 {len(self._one_ctr)} 개: '
+                                + ' '.join(f's{s_:+.2f}/l{l:+.2f}' for s_, l in pts[-8:]) + ')')
+            if g('m7_test_grid_err_m') != 0.0 and not measured and ctr == 0.0:
+                # 시험: '측정 없이 차 = 가운데 차로 가운데' 로 가정할 때만 틀림 (측정했으면 그 값이 맞다고 봄)
+                ctr -= g('m7_test_grid_err_m')
+                how += f', 시험용 격자 오차 {g("m7_test_grid_err_m") * 100:+.0f} cm (오른쪽으로 둠)'
             self._m7['grid'] = {'phase': ctr + self._m7.get('line_corr', 0.0), 'n_left': int(g('m7_entry_lane')),
                                 'how': how, 'fixed': True}
             self.get_logger().info(f'[M7] 차로 격자 고정: {self._m7["grid"]["how"]}')
