@@ -41,10 +41,6 @@ mission_manager:
     m7_ack_entry_cam_single: true      # 11-11: M7 진입 격자를 한쪽 선 프레임으로 잼 (실차 진입 때 늘 한쪽 선만 → 보정 0 개 → 격자 8~25 cm 틀려 갇힘 ack39). 시뮬 격자 오차 25 cm 10/10 완주
     m7_ack_entry_single_deg: 65.0      # 11-11 ack40: 실차 코너 출구 차선 방향이 -38~-60° 로 나와 (35° 문턱) 점 0 개 → bag 재계산: 65° 면 20 점 +18.7 cm (뒤 노란 선 보정이 잰 실제 +20.3 cm)
     m7_ack_no_opposite_exit: true      # 11-11 ack40: 맨 왼쪽에서 장애물 다 지난 순간 끝내 B 인데 A 로 감 → 갈림길 쪽 옆이 빌 때까지 감
-    m7_ack_fast: true                   # 11-11: M7 원호 121 조합 한 번에 검사 (결과 같음, PC 45 → 11 ms) — 실차 M7 중 처리 지연 (odom 15~30 Hz·뎁스 0.6 s) 대책
-    sensor_thread: true                 # 11-11: odom·IMU·라이다 따로 스레드 (자세 늦지 않게). 재시작해야 바뀜
-    small_queues: true                  # 11-11: odom 5·뎁스 장애물 2 깊이 (늘 최신)
-    m7_ack_back_fix: true               # 11-11 ack41: 후진은 실제 상자로만 막고 노란 선은 바퀴 규칙, 35° 상한, 0 m 후진 대처
     m7_final_two_lanes: true            # 갈림길 표지판 반대쪽 끝 차로에서 장애물 다 지나면 한 칸씩 갈림길 쪽으로 (ack35: B 인데 맨 왼쪽 → A)
     m1_line_extra_m: 0.04               # 신호등 앞 횡단보도 정지선: 오도메트리로는 바퀴가 선 위 (−0.5~−1.5 cm) 인데 실제로는 선 앞에 섬 (사용자 11-10) → 4 cm 더
     m1_near_ok_after_far: true         # 11-11 ack41: 서행 구간 선 지난 뒤 진짜 정지선을 '횡단보도 먼 쪽' (0.14 m) 으로 보고 안 섬 → 먼 선 뒤 첫 선은 받음
