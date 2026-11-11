@@ -270,6 +270,7 @@ class MissionManager(Node):
         p('m7_ack_island', True)           # 아커만: 갈림길 분리대 (가운데 차로 끝 쐐기 섬) 를 M7 벽으로 — 있으면 잠금 뒤 옮기기 거리 제한 없음
         p('m7_ack_island_nose_m', 4.30)    #   입구 흰 가로선 → 섬 코 (도면 4.39, 여유 0.09). 코에서 0.25 m 동안 45° 로 폭 0.5 까지
         p('m7_final_to_goal', True)       # M2: 장애물 다 지난 뒤 목표 차로가 한 칸 옆이면 옮기고 끝냄
+        p('m7_ack_no_opposite_exit', False)  # 아커만: 갈림길 반대쪽 끝 차로에서도 옆이 빌 때까지 안 끝냄 (실차 ack40, real_limo 에서 켬)
         p('m7_ack_no_center_exit', True)  # 아커만: 가운데 차로 (분리대로 가는 차로) 에서는 '앞이 비었다' 로 끝내지 않음 — 목표 차로가
                                            # 옆 장애물로 아직 막혀 있어도 m7_min_exit_m 에서 끝내 가운데로 남으면, 차선 추종은 노란 선만 보므로
                                            # 흰 점선뿐인 가운데 차로에서 차선 0 % → 영원히 멈춤 (2D 시뮬 11-10 t39_gen). 계속 가다 옆이 비면
@@ -2321,8 +2322,17 @@ class MissionManager(Node):
                 and not m.get('center_wait_logged')):
             m['center_wait_logged'] = True
             self.get_logger().info(f'[M7] 앞은 비었지만 가운데 차로 {k} — 안 끝내고 목표 차로 {goal} 옆이 빌 때까지 감 (s {sc:.2f} m)')
-        if (not changing and a_own > g('m7_clear_m') and clear and sc > max(0.3, g('m7_min_exit_m')) and not center_wait) \
-                or sc > g('m7_max_m'):
+        # 반대쪽 끝 차로 (갈림길과 두 칸) 도 안 끝냄 — 실차 11-11 ack40: 맨 왼쪽에서 장애물을 다 지났는데 가운데 차로 옆에 방금 지난 상자가
+        # 아직 걸려 (m7_enter_window_m) 한 칸 옮기기를 못 했고, 같은 순간 '앞 1 m 빔' 으로 끝내 B 표지판인데 A 로 감
+        opp_wait = (self.ack() and g('m7_ack_no_opposite_exit') and goal is not None and abs(k - goal) == 2
+                    and not m.get('final_shift'))
+        if (opp_wait and not changing and a_own > g('m7_clear_m') and clear and sc > max(0.3, g('m7_min_exit_m'))
+                and not m.get('opp_wait_logged')):
+            m['opp_wait_logged'] = True
+            self.get_logger().info(f'[M7] 앞은 비었지만 갈림길 반대쪽 끝 차로 {k} — 안 끝내고 차로 '
+                                   f'{k + (1 if goal > k else -1)} 옆이 빌 때까지 감 (s {sc:.2f} m)')
+        if (not changing and a_own > g('m7_clear_m') and clear and sc > max(0.3, g('m7_min_exit_m')) and not center_wait
+                and not opp_wait) or sc > g('m7_max_m'):
             self._reset_until = now + 0.5
             self._m7_hits = 0
             self.set_state('LANE', f'앞 {g("m7_clear_m")} m 비어 있음, 차로 변경 {m["changes"]} 번, 지금 차로 {k}, '
