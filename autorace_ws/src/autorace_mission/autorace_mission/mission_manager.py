@@ -357,6 +357,7 @@ class MissionManager(Node):
         p('m7_line_fix_frames', 8)         # 이만큼 모이면 그 중앙값 × m7_line_fix_gain 만큼 격자를 옮김
         p('m7_line_fix_gain', 0.5)         # 한 번에 다 옮기면 측정 튐에 흔들림 (rosbag 재생: +8.7 → −5.4 cm)
         p('m7_line_fix_gate_m', 0.20)      # 격자 중심과 이보다 다르면 버림 (다른 선)
+        p('m7_wait_sign', False)           # 갈림길 표지판 못 봤으면 M7 을 안 끝내고 가운데 차로에서 기다림 (실차 ack45, real_limo 에서 켬)
         p('m7_final_clear_ends', False)    # 끝내기 옮김 조건을 지금·갈림길 쪽 차로 앞만 보게 (실차 ack44, real_limo 에서 켬)
         p('m7_final_direct', False)        # 반대쪽 끝 차로면 갈림길 쪽 끝 차로로 한 번에 (실차 ack43, real_limo 에서 켬)
         p('m7_final_lock_ok', False)       # 갈림길 표지판 잠금 (분기점 가까움) 뒤에도 끝내기 옮김 (실차 ack43, real_limo 에서 켬)
@@ -2537,8 +2538,21 @@ class MissionManager(Node):
             m['opp_wait_logged'] = True
             self.get_logger().info(f'[M7] 앞은 비었지만 갈림길 반대쪽 끝 차로 {k} — 안 끝내고 차로 '
                                    f'{k + (1 if goal > k else -1)} 옆이 빌 때까지 감 (s {sc:.2f} m)')
+        # m7_wait_sign: 갈림길 표지판을 아직 못 봤으면 안 끝내고 가운데 차로 (A·B 어느 쪽으로도 가는 자리) 로 옮겨 M7 속도로 가며 기다림.
+        # 보면 위 끝내기 옮김이 그쪽 끝 차로로. 실차 11-11 ack45: s 3.7 에서 오른쪽 끝 차로로 끝내 차선 추종 (0.3 m/s) 으로 표지판 A 를 한 번도
+        # 못 보고 B 길 (ack43·44 는 M7 0.1 m/s 중 s 3.4 근처에서 봄)
+        sign_wait = (self.ack() and g('m7_wait_sign') and goal is None and not self._m2['done'] and sc < g('m7_max_m'))
+        if sign_wait and not changing and clear and sc > max(0.3, g('m7_min_exit_m')):
+            ctr_k = 1
+            if k != ctr_k and not m.get('sign_wait_shift') and window_free(ctr_k, sc - g('m7_enter_window_m'), sf + 0.6):
+                m['sign_wait_shift'] = True
+                m['n'], m['changes'] = m['grid']['n_left'] - ctr_k, m['changes'] + 1
+                self.get_logger().info(f'[M7] 장애물 다 지났지만 갈림길 표지판 아직 못 봄 — 가운데 차로 {ctr_k} 로 옮겨 기다림 (지금 차로 {k}, s {sc:.2f} m)')
+            elif not m.get('sign_wait_logged'):
+                m['sign_wait_logged'] = True
+                self.get_logger().info(f'[M7] 장애물 다 지났지만 갈림길 표지판 아직 못 봄 — 안 끝내고 천천히 감 (차로 {k}, s {sc:.2f} m)')
         if (not changing and a_own > g('m7_clear_m') and clear and sc > max(0.3, g('m7_min_exit_m')) and not center_wait
-                and not opp_wait) or sc > g('m7_max_m'):
+                and not opp_wait and not sign_wait) or sc > g('m7_max_m'):
             self._reset_until = now + 0.5
             self._m7_hits = 0
             self.set_state('LANE', f'앞 {g("m7_clear_m")} m 비어 있음, 차로 변경 {m["changes"]} 번, 지금 차로 {k}, '

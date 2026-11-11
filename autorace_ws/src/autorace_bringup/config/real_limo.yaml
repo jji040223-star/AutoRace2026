@@ -84,6 +84,7 @@ mission_manager:
     m7_final_direct: true               # 11-11 ack43: A 인데 오른쪽 끝에서 한 칸만 옮기다 가운데로 끝남 → 갈림길 쪽 끝 차로로 한 번에
     m7_final_lock_ok: true              # 11-11 ack43: 표지판 잠금 뒤에도 끝내기 옮김
     m7_final_clear_ends: true           # 11-11 ack44: 분리대 맨 앞 표지판 받침대 때문에 끝내기 옮김을 못 함 → 지금·갈림길 쪽 차로 앞만 봄
+    m7_wait_sign: true                  # 11-11 ack45: 표지판 못 본 채 3.7 m 에서 끝내 B 로 감 → 못 봤으면 가운데 차로에서 천천히 기다림
     m7_back_grow: false                 #   늘리지 않음 (ack8·9: 0.45 m 까지 늘어 이전 구간까지 물러남)
     m8_back_m: 0.2                      # M8 후진도 0.2 (시뮬 0.10)
     m8_after_m7_m: 1.5                  # M7 끝 뒤 1.5 m 전엔 M8 안 켬 — ack18: 마지막 줄 흰 상자 다리 (라이다 높이) 를 라바콘 13 개로 봐 A 길에서 M8 → 코너 보조로 이탈
@@ -104,6 +105,7 @@ mission_manager:
     m7_line_fix_gate_m: 0.35            #   격자와 이보다 다르면 버림 (시뮬 0.20)
 parking_controller:
   ros__parameters:
+    gap_blip_ok: true                   # 11-11 ack45: 첫 LIMO 끝 바로 뒤 2 cm 물체로 칸 재기를 처음부터 다시 해 맞는 칸을 건너뜀 → 이어서 잼
     ack_min_radius_m: 0.47              # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
     ack_park_margin_m: -0.02            # 원호 시작 = 칸 가운데 − (0.47 + 이것) = 0.45 m 앞 (시뮬 +0.08 = 0.55) — ack21: 실차가 중간 곡률에서 명령보다
                                         #   더 돌아 (곡률 1 → 1.25) 90° 를 칸 가운데선 10.6 cm 전에 다 돎 → 칸 안 옆 −10.9 cm (오른쪽 여유 3 cm)

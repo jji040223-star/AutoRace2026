@@ -75,6 +75,7 @@ class ParkingController(Node):
         p('side_far_m', 0.95)              #   이 밖·없음 = 멂 (빈 칸)
         p('limo_min_len_m', 0.20)          # 옆 '가까움' 구간이 진행 방향으로 이보다 짧으면 LIMO 아님 (표지판 기둥 등). LIMO 옆에서 보이는 폭 0.22  # 0.12 → 0.20 (2D 시뮬 11-09 g2: 기둥이 0.129 m 로 재져 LIMO 로 착각. 기둥 실차 0.06–0.08 · 시뮬 ~0.10, LIMO 0.29–0.34)
         p('gap_min_m', 0.45)               # 빈 칸 폭 (LIMO 옆면 사이) 최소 — 차 폭 0.22 + 여유
+        p('gap_blip_ok', False)            # 칸을 재는 중 짧은 물체가 잡혀도 칸 재기를 이어감 (실차 ack45, real_limo 에서 켬)
         p('gap_max_m', 1.30)
         p('limo_half_l', 0.161)            # 이웃 LIMO 반 길이 (끝면 → 칸 깊이 가운데)
         p('align_tol_m', 0.008)
@@ -617,12 +618,18 @@ class ParkingController(Node):
                 pr['near_d'].append(d)
             elif far:
                 ln = a - pr.get('near0', a)
-                if ln < g('limo_min_len_m'):
+                if ln < g('limo_min_len_m') and g('gap_blip_ok') and pr.get('prev_far0') is not None:
+                    # 빈 칸을 재는 중 (LIMO 끝 뒤) 잡힌 짧은 물체 — 칸 재기를 처음부터 다시 하지 않고 이어서 (실차 11-11 ack45: 첫 LIMO 끝
+                    # 바로 뒤 2 cm 물체 하나로 '첫 LIMO 부터 다시' 가 돼 맞는 칸을 건너뛰고 7 m 뒤 엉뚱한 틈에 들어감)
+                    pr['phase'], pr['far0'] = 'far', pr.pop('prev_far0')
+                    self.get_logger().info(f'[M4] 칸 안 짧은 물체 {ln:.3f} m — 무시하고 칸 재기 이어감 (LIMO 끝 진행 {pr["far0"]:.3f} m 부터)')
+                elif ln < g('limo_min_len_m'):
                     # 표지판 기둥·사람 다리처럼 짧은 물체 — LIMO 가 아님 (실차 11-06 full10: P 표지판 기둥과 첫 LIMO 사이에 주차)
                     pr['phase'], pr['near_d'] = 'near1', []
                     self.get_logger().info(f'[M4] 옆 물체 길이 {ln:.3f} m < {g("limo_min_len_m")} — LIMO 아님 (표지판 등), 다음 LIMO 를 찾음')
                 else:
                     pr['phase'], pr['far0'] = 'far', a
+                    pr.pop('prev_far0', None)
                     self.get_logger().info(f'[M4] 옆: 가까움 → 멂 (LIMO 끝, 길이 {ln:.3f} m, 진행 {a:.3f} m, '
                                            f'LIMO 끝면까지 {np.median(pr["near_d"]):.3f} m)')
         elif pr['phase'] == 'far' and near:
@@ -642,6 +649,8 @@ class ParkingController(Node):
                                         f'{depth:.3f} m, odom ({cx:.2f}, {cy:.2f}) — 시작 뒤 {now - self.t0:.1f} s')
                 self.pub(0.0, 0.0)
                 return
+            if w < g('gap_min_m'):
+                pr['prev_far0'] = pr['far0']   # 칸보다 짧은 틈 = 칸 안 물체일 수 있음 — 그게 짧으면 이 칸을 이어서 잼 (gap_blip_ok)
             pr['phase'], pr['near0'], pr['near_d'] = 'in_near1', a, [d]
             self.get_logger().info(f'[M4] 틈 {w:.3f} m — 칸 폭이 아님, 다음 틈을 찾음')
         if new_scan:
