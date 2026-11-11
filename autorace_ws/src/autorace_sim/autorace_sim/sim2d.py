@@ -150,6 +150,8 @@ class Sim2D(Node):
         p('ack_understeer_k', 0.0)         # 실제 곡률 ÷ (1 + k v²) [s²/m²]
         p('ack_slip_noise', 0.0)           # 옆 미끄럼 무작위 걸음 [m / (m/s · √s)]
         p('cmd_latency_s', 0.0)            # 명령 지연 [s] (diff·아커만 공통)
+        p('ack_curv_map', [0.0])           # 명령 곡률 → 실제 곡률 표 [명령1, 실제1, 명령2, 실제2, …] (길이 4 이상이면 켬, 사이는 선형).
+                                           # 실차 11-10 드라이버 배율 1.0 뒤 측정: 1.0 → 1.27, 2.0 → 2.1, 최대 2.3~2.47 (반경 0.41~0.43)
         p('ack_steer_scale', 1.0)          # 실제 조향각 = 명령 조향각 × 이것 (서보·링크 오차로 덜 꺾임 < 1 — '실차가 덜 도는' 상황 재현).
                                            # 최대 조향도 같이 줄어 실제 최소 반경 = L / tan(scale · atan(L / ack_min_radius))
         p('odom_v_scale', 1.0)
@@ -183,6 +185,7 @@ class Sim2D(Node):
         p('fake_detections', True)         # YOLO 대신: 보이는 표지판·신호등 박스를 /perception/detections, /perception/traffic_light_detections 로
         p('sign_range_m', 4.5)
         # 실차 모드 (실차 run1~5, 11-05 에서 본 것). 기본값은 모두 꺼짐 = 예전 시뮬과 같음
+        p('det_hz', 0.0)                   # >0: 표지판·신호등 박스를 이 주기로만 (실차 YOLO 초당 7 장 안팎, 영상보다 느림). 0 = 영상마다
         p('det_miss', 0.0)                 # 보이는 표지판을 그 장에서 놓칠 확률 (실차: 띄엄띄엄 잡혀 '연속 3 장' 을 못 채움, run5)
         p('det_miss_stick', 0.0)           # 앞 장에서 놓쳤으면 이번 장도 놓칠 확률 (놓침이 몰려서 옴)
         p('det_conf', [0.9, 0.9])          # 확신도 범위 (실차 0.51~0.91 — 멀면 낮게)
@@ -604,7 +607,12 @@ class Sim2D(Node):
             elif abs(vc) < 1e-4:
                 dc = math.copysign(dmax, wc)
             else:
-                dc = max(-dmax, min(dmax, math.atan(L * wc / vc)))
+                kc = wc / vc
+                cm = list(g('ack_curv_map'))
+                if len(cm) >= 4:            # 실차 측정 표: 가운데 곡률에서 명령보다 더 돎
+                    xs, ys = cm[0::2], cm[1::2]
+                    kc = math.copysign(float(np.interp(abs(kc), xs, ys)), kc)
+                dc = max(-dmax, min(dmax, math.atan(L * kc)))
             dc *= g('ack_steer_scale') * (g('ack_steer_scale_left') if dc > 0 else g('ack_steer_scale_right') if dc < 0 else 1.0)
             dc += math.radians(g('ack_steer_bias_deg'))    # 서보 가운데 어긋남 (곧게 명령해도 한쪽으로 휨)
             bl = math.radians(g('ack_steer_backlash_deg'))
@@ -884,7 +892,10 @@ class Sim2D(Node):
             self.pub_depth.publish(d)
             self.pub_dinfo.publish(self.cam_info(st, 'camera_depth_optical_frame'))
         if self.g('fake_detections'):
-            self.publish_detections(m.header)
+            dh = self.g('det_hz')
+            if dh <= 0 or self.sim_t >= getattr(self, '_det_due', 0.0):
+                self._det_due = self.sim_t + (1.0 / dh if dh > 0 else 0.0)
+                self.publish_detections(m.header)
 
     SIGN_LABELS = {'M5_slow': 'slow', 'M5_bump': 'speed_bump', 'M3_ped': 'crosswalk', 'M4_parking': 'parking', 'M2_branch': None}
 
