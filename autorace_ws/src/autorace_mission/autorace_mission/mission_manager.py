@@ -178,6 +178,18 @@ class MissionManager(Node):
                                            # 격자가 한 칸 밀림 → 빈 오른쪽 차로를 없는 차로로 봄, 3 번 중 2 번)
         p('m7_entry_from_m3', False)       # M7 격자: 바로 전 M3 정지 자세 (정지선 위, 곧게) 에서 온 거리로 가운데 차로 위치를 잼 (트랙 도면 고정).
         #                                    진입은 코너 안이라 다른 보정 표본이 0 개 → '차 = 가운데 차로 가운데' 가정이 8~18 cm 틀림 (실차 ack31·32·35, 2D 시뮬 r1)
+        p('m7_entry_guide', False)         # M3 뒤 코너 끝 '진입선 따라가기' (실차 11-12, 사용자 아이디어): ack30~50 거의 매번 코너를 20~28° 덜 돈 채
+        #                                    M7 이 켜지고 깔때기 선에 끌려 옆 차로로 들어감 (ack50 차로 0 → 노란 선 밖). M3 정지 자세 기준 가운데 차로
+        #                                    중심선 (M3 방향 m7_m3_to_mid_m 앞, M3 방향 −90°) 을 각도+옆으로 따라가며 깔때기에선 차선 추종 무시. real_limo 에서 켬
+        p('m7_entry_guide_deg', 35.0)      #   남은 각이 이 안이면 켬 (더 일찍 세게 꺾으면 안쪽 선 밟음)
+        p('m7_entry_guide_axis_deg', 6.0)  #   M3 기준 목표 방향과 차로 방향 (lane_axis) 이 이보다 다르면 안 켬
+        p('m7_entry_guide_speed', 0.2)
+        p('m7_entry_guide_k_psi', 1.5)     #   곡률 = k_psi · 방향 오차 [rad] − k_l · 옆 오차 [m]
+        p('m7_entry_guide_k_l', 3.0)
+        p('m7_entry_guide_lmax', 0.25)     #   옆 오차는 이 안으로 잘라 씀
+        p('m7_entry_guide_kmax', 1.67)     #   곡률 상한 (반경 0.6 m)
+        p('m7_entry_guide_end_m', 2.0)     #   M3 정지 자세에서 목표 방향으로 이만큼 오면 끝 (가로선 ~0.95, 깔때기 끝 ~1.5) → 차선 추종
+        p('m7_entry_guide_max_s', 12.0)
         p('m7_m3_to_mid_m', 1.70)          #   M3 정지 자세 (base) → 가운데 차로 가운데선, M3 진행 방향 거리 [m] (2D 시뮬 = 대회 도면 1.692~1.704)
         p('m7_m3_max_dist_m', 4.0)         #   M3 정지 자세에서 이보다 멀리서 M7 이 켜지면 안 씀 (다른 곳 M3)
         p('m7_m3_max_corr_m', 0.80)        #   구한 가운데 차로 옆 거리가 이보다 크면 안 씀 (차가 이미 옆 차로면 ±0.52 — 2D 시뮬 x19 −47 cm 가 맞았는데 0.35 로 버림.
@@ -521,6 +533,7 @@ class MissionManager(Node):
         self._m7_done = False
         self._m1, self._m1_hits, self._m1_done = {}, 0, False
         self._m3_done = False
+        self._m7_entry_used = False
         self._m4_started = False           # /parking/start 를 보냄 (또는 표지판 기다림)
         self._m4_pending = None            # 순서는 됐고 주차 표지판을 기다리는 중 (이유)
         self._m4_sign = False              # 갈림길 뒤에 주차 표지판을 봄
@@ -646,6 +659,7 @@ class MissionManager(Node):
         self._bar_pt = None
         self._m1, self._m1_hits, self._m1_done = {}, 0, False
         self._m3_done = False
+        self._m7_entry_used = False
         self._m4_started = False
         self._m4_pending, self._m4_sign = None, False
         self._light = None                 # 마지막 /perception/traffic_light
@@ -1016,7 +1030,7 @@ class MissionManager(Node):
             if skewed and self._m7_hits >= g('m7_confirm_frames') and not getattr(self, '_m7_skew_logged', False):
                 self._m7_skew_logged = True
                 self.get_logger().info(f'[M7] 장애물 {near_x:.2f} m 앞이지만 차로와 {math.degrees(herr):.0f}° 비스듬 — 곧아질 때까지 차선 추종')
-        if (self.state in ('LANE',) + SLOW_STATES and self._m7_hits >= g('m7_confirm_frames') and not two_yellow
+        if (self.state in ('LANE', 'M7_ENTRY') + SLOW_STATES and self._m7_hits >= g('m7_confirm_frames') and not two_yellow
                 and not turning and not skewed and not self._m7_done and not self._m2['done'] and not self._m8_done and 'M7' not in self.skip):
             self.m7_enter()
 
@@ -1890,6 +1904,57 @@ class MissionManager(Node):
         if self._scan is None or now - self._scan[0] > 0.3:
             return None
         return self._scan[1], self._scan[2]
+
+    def m7_entry_geom(self):
+        """M3 정지 자세 기준 진입선: (목표 방향, 방향 오차 [rad, + = 왼쪽으로 돌아야], 옆 오차 [m, + = 선 왼쪽], 목표 방향 진행 [m])."""
+        mp = self._m3_stop_pose
+        th = wrap(mp[2] - math.pi / 2)                  # 시계 방향 트랙: M3 뒤 코너는 오른쪽 90°
+        f = (math.cos(mp[2]), math.sin(mp[2]))
+        L = self.get_parameter('m7_m3_to_mid_m').value
+        px, py = mp[0] + L * f[0], mp[1] + L * f[1]
+        dx, dy = self._pos[0] - px, self._pos[1] - py
+        e = dx * -math.sin(th) + dy * math.cos(th)
+        sd = (self._pos[0] - mp[0]) * math.cos(th) + (self._pos[1] - mp[1]) * math.sin(th)
+        return th, wrap(th - self._yaw), e, sd
+
+    def m7_entry_check(self, now):
+        """LANE 에서: M3 뒤 코너 끝 (남은 각 ≤ m7_entry_guide_deg) 이면 M7_ENTRY 로."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        if (self._m3_stop_pose is None or not self._m3_done or self._m7_done or getattr(self, '_m7_entry_used', False)
+                or self._pos is None or self._yaw is None or 'M7' in self.skip
+                or math.dist(self._pos, self._m3_stop_pose[:2]) > g('m7_m3_max_dist_m')):
+            return
+        th, pe, e, sd = self.m7_entry_geom()
+        if abs(pe) > math.radians(g('m7_entry_guide_deg')) or sd > g('m7_entry_guide_end_m') - 0.3:
+            return
+        self._m7_entry_used = True
+        ax = self.lane_axis()[0]
+        if abs(wrap(th - ax)) > math.radians(g('m7_entry_guide_axis_deg')):
+            self.get_logger().info(f'[M7 진입] 안 함: M3 기준 목표 방향 {math.degrees(th):.1f}° 와 차로 방향 {math.degrees(ax):.1f}° 가 '
+                                   f'{abs(math.degrees(wrap(th - ax))):.1f}° 다름')
+            return
+        self._m7_entry = {'t': now, 'log': now}
+        self.set_state('M7_ENTRY', f'M3 뒤 코너 끝: 남은 각 {math.degrees(pe):+.1f}°, 가운데 차로 중심선에서 옆 {e * 100:+.1f} cm '
+                                   f'(+ = 왼쪽), M3 에서 {sd:.2f} m → 진입선 따라가기 (차선 추종 무시)')
+
+    def m7_entry_tick(self, now):
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        en = self._m7_entry
+        th, pe, e, sd = self.m7_entry_geom()
+        if sd >= g('m7_entry_guide_end_m') or now - en['t'] > g('m7_entry_guide_max_s'):
+            self._reset_until = now + 0.5
+            self.set_state('LANE', f'진입선 따라가기 끝 (M3 에서 {sd:.2f} m, 방향 오차 {math.degrees(pe):+.1f}°, 옆 {e * 100:+.1f} cm, '
+                                   f'{now - en["t"]:.1f} s) — 장애물 못 봄 → 차선 추종')
+            return
+        lm = g('m7_entry_guide_lmax')
+        k = g('m7_entry_guide_k_psi') * pe - g('m7_entry_guide_k_l') * max(-lm, min(lm, e))
+        km = g('m7_entry_guide_kmax')
+        k = max(-km, min(km, k))
+        v = g('m7_entry_guide_speed')
+        self.m7_publish(v, v * k)
+        if now - en['log'] >= 1.0:
+            en['log'] = now
+            self.get_logger().info(f'[M7 진입] 방향 오차 {math.degrees(pe):+.1f}°, 옆 {e * 100:+.1f} cm, M3 에서 {sd:.2f} m, 곡률 {k:+.2f}')
 
     def m7_publish(self, v, w):
         if getattr(self, '_stopping', False):
@@ -3396,6 +3461,8 @@ class MissionManager(Node):
                 self._tick_diag = {'t': now, 'n': 0, 'sum': 0.0, 'max': 0.0}
         elif s == 'M8_AVOID':
             self.m8_tick(now)
+        elif s == 'M7_ENTRY':
+            self.m7_entry_tick(now)
         elif s == 'DONE':
             cmd.stop = True                # 주차·탈출 끝 — 멈춤
         elif s in ('M1_APPROACH', 'M1_STOP', 'M1_GO'):
@@ -3405,6 +3472,8 @@ class MissionManager(Node):
                 self._m3_cooldown_from = self._pos
                 self._m3_done = True
                 self.set_state('LANE', f'정지선 통과 {g("m3_exit_m")} m, 이후 {g("m3_cooldown_m")} m 동안 보행자 표지판 무시')
+        if self.state == 'LANE' and g('m7_entry_guide'):
+            self.m7_entry_check(now)
         if self.state in ('LANE', 'M2_SHIFT') + SLOW_STATES:
             self.m2_tick(now, cmd)
         if self.state == 'LANE' and not self._m4_started and self.m4_ready():

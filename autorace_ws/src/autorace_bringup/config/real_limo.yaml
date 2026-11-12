@@ -38,7 +38,8 @@ lidar_processor:
 mission_manager:
   ros__parameters:
     m7_line_relocate: false             # 노란 선으로 격자 크게 옮기기 끔 — 11-10 실차 4 번 (ack25·27·28·33) 모두 오판 (입구 선·분리대 선을 바깥선으로)
-    m7_entry_from_m3: false             # 끔 (11-11 다른 세션 검토): 실차 M3 정지 위치가 주행마다 0.45 m 까지 다름 (ack34·35 다른 선) → ack35 에 쓰면 오차 16 → 45 cm
+    m7_entry_from_m3: true              # 11-12 다시 켬: 끈 이유 (M3 가 다른 선에 섬, ack34·35) 는 stop_line_min_cov 0.82 로 해결 (ack43~50 8 번 모두 정지선 −1~−2 cm). M7 켤 때 차로를 M3 기준 거리로
+    m7_entry_guide: true                # 11-12 사용자 아이디어: M3 뒤 코너 끝을 각도+옆으로 맞춰 가운데 차로로 진입, 깔때기에선 차선 추종 무시 (ack50 차로 0 진입 → 이탈)
     m7_ack_entry_cam_single: true      # 11-11: M7 진입 격자를 한쪽 선 프레임으로 잼 (실차 진입 때 늘 한쪽 선만 → 보정 0 개 → 격자 8~25 cm 틀려 갇힘 ack39). 시뮬 격자 오차 25 cm 10/10 완주
     m7_ack_entry_single_deg: 65.0      # 11-11 ack40: 실차 코너 출구 차선 방향이 -38~-60° 로 나와 (35° 문턱) 점 0 개 → bag 재계산: 65° 면 20 점 +18.7 cm (뒤 노란 선 보정이 잰 실제 +20.3 cm)
     m7_ack_no_opposite_exit: true      # 11-11 ack40: 맨 왼쪽에서 장애물 다 지난 순간 끝내 B 인데 A 로 감 → 갈림길 쪽 옆이 빌 때까지 감
