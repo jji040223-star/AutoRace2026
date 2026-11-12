@@ -7,12 +7,12 @@
 lane_follower:
   ros__parameters:
     camera_hfov_deg: 66.4               # camera_info fx 488.2 → 2·atan(320/488.2)
-    camera_height: 0.190
+    camera_height: 0.182                # 11-12 재보정 (카메라 다시 고정, 이전 0.190) lane_calib 0.183/0.181
     stop_line_min_cov: 0.82             # 11-11 ack43·44: M3 횡단보도 앞 정지선이 덮는 비율 0.85~0.88 (M1 쪽은 0.92~0.99) 이라 0.9 에서 못 잡고 줄무늬 너머 선에 섬 → bag 재생으로 0.8 이면 0.50 m 부터 잡힘. 줄무늬 막대는 0.6
-    camera_pitch_deg: 8.46
-    camera_yaw_deg: 0.26
-    yellow_hsv_lo: [10, 57, 133]        # 연습 트랙 노란 선 H 14–21, S 82–124, V 191–255 (매트 0 %)
-    yellow_hsv_hi: [25, 255, 255]
+    camera_pitch_deg: 6.31              # 11-12 재보정 (카메라 다시 고정, 이전 8.46) 6.38/6.24
+    camera_yaw_deg: -0.64               # 11-12 재보정 (카메라 다시 고정, 이전 0.26) -0.53/-0.75
+    yellow_hsv_lo: [10, 57, 119]        # 11-12 재보정 (카메라 다시 고정, 이전 [10, 57, 133]) H 14–24, S 82–144, V 171–234 (매트 0 %)
+    yellow_hsv_hi: [27, 255, 255]       # 11-12 재보정 (카메라 다시 고정, 이전 [25, 255, 255])
     # 아커만 실차 (11-10 ack6: 코너에서 늦게 꺾어 이탈 — 바퀴가 명령의 절반 (28° → 13°) 만 꺾임). 팀원 11-09 ack5 에서 확인한 값
     curve_steer_bias: 0.25              # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
     curve_slow: 0.5                     # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로
@@ -27,13 +27,13 @@ traffic_light:
     publish_unmatched: false            # 맞는 YOLO 결과 없는 영상은 안 냄 → 빨강·none 번갈아 M1 연속 수 끊김 막음 (ack27)
 depth_obstacle:
   ros__parameters:
-    cam_height: 0.192
-    cam_pitch_deg: 5.32
-    cam_yaw_deg: 0.26
+    cam_height: 0.185                   # 11-12 재보정 (카메라 다시 고정, 이전 0.192) depth_calib 0.184/0.187, 차로 폭 0.523/0.532 m ✓
+    cam_pitch_deg: 3.25                 # 11-12 재보정 (카메라 다시 고정, 이전 5.32) 3.32/3.18
+    cam_yaw_deg: -0.64                  # 11-12 재보정 (카메라 다시 고정, 이전 0.26)
 lidar_processor:
   ros__parameters:
-    tall_cam_h: 0.192
-    tall_cam_pitch_deg: 5.32
+    tall_cam_h: 0.185                   # 11-12 재보정 (카메라 다시 고정, 이전 0.192)
+    tall_cam_pitch_deg: 3.25            # 11-12 재보정 (카메라 다시 고정, 이전 5.32)
     tall_cam_vfov_deg: 46.8             # 화면 위 끝 = 2·atan(cy 211.3 / fy 488.2) (영상 중심이 위로 치우쳐 있어 실제 세로 화각 52.4° 대신)
 mission_manager:
   ros__parameters:
@@ -55,7 +55,7 @@ mission_manager:
     m7_line_relocate_after_entry: true  # 입구 1차로에서 노란 선 위치 다시 맞춤 안 함 (ack27)
     m3_line_margin_m: -0.02             # 정지 위치 (M3·M1): 바퀴 맨 앞이 정지선 가까운 끝에서 2 cm 들어간 곳 (정지선 위) — 사용자 11-10. 시뮬 +0.025 (선 앞)
     m7_cam_hfov_deg: 66.5
-    m7_cam_yaw_deg: 0.26
+    m7_cam_yaw_deg: -0.64               # 11-12 재보정 (카메라 다시 고정, 이전 0.26)
     m7_axis0_from_start: false          # 트랙 축 고정 끔 — ack22: 출발 때 차가 비스듬해 축 41° (차로와 45° 차이) → M7 차로 방향·격자 엉망. 곧은 차선으로 잼 (M8 보조는 90° 단위라 어디서 출발해도 됨)
     # 아커만 (11-10) — 실차 측정 전엔 시뮬 기본값. 실차검증_아커만.md 의 측정 1·5 결과로 바꿈 (주차 쪽과 같은 값)
     ack_min_radius_m: 0.47              # 11-10 드라이버 조향 배율 2.47→1.0 (반경 0.42 m) 뒤 시뮬 값으로 (측정 0.41~0.43)
