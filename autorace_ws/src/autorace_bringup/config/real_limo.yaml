@@ -78,6 +78,7 @@ mission_manager:
     m7_back_far_m: 0.3
     # 11-11 저녁 (ack41 뒤, 실차 미검증 — 문제면 fast·back_fix 는 주행 중 ros2 param set 으로 끌 수 있음, 나머지 둘은 재시작)
     m7_ack_back_fix: true               # 후진 회복: 가상 벽으로 후진 안 막음 (ack41 0 cm 후진 12 번), 후진 중 방향 상한, 방식은 시작 때 한 번
+    m7_ack_back_limit_off: true         # 11-12: ack48 후진 한계에 닿아 0 m 후진 → 같은 자리 무한 반복. back_fix 면 한계 끔
     m7_ack_fast: true                   # 원호 121 조합 한 번에 검사 (PC m7_tick 45 → 11 ms, 결과 같음)
     sensor_thread: true                 # odom·IMU·라이다를 따로 스레드에서 받음 (M7 중 odom 15~30 Hz·뎁스 0.6 s 지연)
     small_queues: true                  # odom 큐 5·뎁스 장애물 큐 2 — 밀려도 늘 최신

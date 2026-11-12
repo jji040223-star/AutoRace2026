@@ -329,6 +329,7 @@ class MissionManager(Node):
         p('m7_ack_back_straighten', True)  # 아커만 후진 중 차로 방향 쪽으로 펴며 후진. False = 조향 0 으로 곧게 (실차 11-10: 조향이 13° 까지만 꺾여 펴는 효과 없음 — 사용자)
         p('m7_ack_back_toward', False)     # 아커만 후진: 가야 할 쪽 (목표 옆) 으로 앞머리가 돌게 반대 조향 (3 점 회전). 실차 켬
         p('m7_ack_back_toward_deg', 35.0)
+        p('m7_ack_back_limit_off', False)  # back_fix 일 때 '가장 먼 s − 0.5 m' 후진 한계 끔 (실차 ack48 0 m 후진 반복). real_limo 에서 켬
         p('m7_ack_back_fix', False)        # 아커만 후진 회복 (실차 ack41): 가상 벽 대신 바퀴 규칙, 0 m 후진 뒤 펴기, 후진 중 방향 상한. real_limo 에서 켬  #   이미 그쪽으로 이만큼 틀어져 있으면 곧게 후진
         p('m7_back_timeout_s', 4.0)        # m7_back_m 한 번 기준 (더 많이 물러날 때는 비례해서 늘림)
         p('m7_back_grow', True)            # 같은 자리 n 번째 막힘이면 m7_back_m × n 만큼 물러남
@@ -2129,6 +2130,10 @@ class MissionManager(Node):
             # 없어 후진이 유일한 회복인데, 0 cm 도 못 물러나고 같은 회복을 3 번 반복해 멈춤 (2D 시뮬 11-09 x5_4, 다른 세션)
             mem_block = mem < 0.06 and not (self.ack() and rf is not None and rf >= g('m7_ack_back_lidar_free_m'))
             back_lim = self.ack() and sc < m['max_s'] - g('m7_ack_back_limit_m')
+            if back_lim and fix and g('m7_ack_back_limit_off'):
+                # 실차 11-11 ack48: 후진을 여러 번 해 이미 한계에 닿은 뒤로는 후진이 0.00 m → 앞 원호도 없어 같은 자리 4~11 번 (손으로 옮김).
+                # back_fix 면 노란 선은 바퀴 규칙, 뒤 상자는 뎁스 기억·라이다로 막으니 이 한계 (시뮬 c9 트랙 밖 후진 대책) 는 안 씀
+                back_lim = False
             why = ('끝' if moved >= bm else f'진행 기준 후진 한계 (가장 먼 s {m["max_s"]:.2f} − {g("m7_ack_back_limit_m")} m)' if back_lim
                    else '시간 초과' if now - bk['t'] > g('m7_back_timeout_s') * bm / g('m7_back_m')
                    else f'뒤 라이다 {rf:.2f} m' if rf is not None and rf < g('m7_back_lidar_m')
