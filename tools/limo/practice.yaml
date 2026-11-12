@@ -1,4 +1,0 @@
-# 연습 트랙 (11-05): 신호등·정적 장애물·라바콘 없음 → 건너뜀. 대회 때는 이 파일 쓰지 말 것.
-mission_manager:
-  ros__parameters:
-    skip_missions: ["M7", "M8", "M1"]

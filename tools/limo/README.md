@@ -5,7 +5,7 @@
 
 ## 고정 기준 (11-12 ack56 완주)
 
-- 코드: 브랜치 `ackermann_real_light`, 태그 `real-best-1112`
+- 코드: 브랜치 `final` (= 태그 `real-best-1112` 에서 기록·시뮬 도구를 뺀 것)
 - 설정: `autorace_ws/src/autorace_bringup/config/real_limo.yaml`
 - 결과: 출발선부터 M5·M6·M3·M7·M2·M8·M1·M4 (주차 + 탈출) 까지 혼자 완주. 주행 전체 CPU 평균 72 %, 최대 88 %.
 
@@ -47,9 +47,9 @@
 | `stop_drive.sh` | 주행 즉시 멈춤 |
 | `env.sh` | CUDA·TensorRT·dl_env 환경 + 워크스페이스 |
 | `merge_params.py` | `real_limo.yaml` 에 속도 (`SPEED`) 를 넣어 주행 폴더에 저장 |
-| `full.yaml`, `practice.yaml` | 미션 설정 (`MP=`) |
+| `full.yaml` | 미션 설정 (`MP=full.yaml`, 모든 미션) |
 | `light_best.yaml` | 신호등 설정 |
 | `cpu_log.sh` | 2 초마다 top + tegrastats 기록 |
 | `bevsnap.py` | 지금 카메라 한 장과 `/lane/debug` (BEV) 한 장을 PNG 로 저장 |
 
-모델 파일 (`sign_best2_1110.pt`, `light_best_1110.pt`) 은 크기 때문에 git 에 넣지 않았다. 리모 `~/AutoRace2026_sim2d/` 에 있다.
+| `sign_best2_1110.pt` | 신호등 YOLO 모델 (`light_model:=`, 팀원 11-10 통합 모델). 표지판 모델은 autorace_perception 패키지 안 |

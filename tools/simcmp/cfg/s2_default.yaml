@@ -1,4 +1,0 @@
-sim2d:
-  ros__parameters:
-    cone_layout: curvy_m
-    seed: 22
