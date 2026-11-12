@@ -184,7 +184,9 @@ class MissionManager(Node):
         p('m7_entry_guide_deg', 35.0)      #   남은 각이 이 안이면 켬 (더 일찍 세게 꺾으면 안쪽 선 밟음)
         p('m7_entry_guide_axis_deg', 6.0)  #   M3 기준 목표 방향과 차로 방향 (lane_axis) 이 이보다 다르면 안 켬
         p('m7_entry_guide_speed', 0.2)
-        p('m7_entry_guide_k_psi', 1.5)     #   곡률 = k_psi · 방향 오차 [rad] − k_l · 옆 오차 [m]
+        p('m7_entry_guide_k_psi', 3.0)     #   곡률 = k_psi · 방향 오차 [rad] − k_l · 옆 오차 [m] + 코너 기본 곡률 (실차 ack51: 1.5 로는 반경 1.5 m 로 돌아
+        #                                    1.9 s 뒤에도 24° 덜 돈 채 M7)
+        p('m7_entry_guide_ff_r', 0.95)     #   덜 돌았을 때 더하는 코너 기본 곡률 = 1/이 반경 (도면 코너 중심선 0.93~1.0 m), 남은 각 15° 안에서 0 으로 줄임
         p('m7_entry_guide_k_l', 3.0)
         p('m7_entry_guide_lmax', 0.25)     #   옆 오차는 이 안으로 잘라 씀
         p('m7_entry_guide_kmax', 1.67)     #   곡률 상한 (반경 0.6 m)
@@ -1948,6 +1950,8 @@ class MissionManager(Node):
             return
         lm = g('m7_entry_guide_lmax')
         k = g('m7_entry_guide_k_psi') * pe - g('m7_entry_guide_k_l') * max(-lm, min(lm, e))
+        if pe < 0 and g('m7_entry_guide_ff_r') > 0:      # 덜 돎 (오른쪽으로 더 돌아야) → 코너 곡률만큼 기본으로
+            k -= min(1.0, -pe / math.radians(15.0)) / g('m7_entry_guide_ff_r')
         km = g('m7_entry_guide_kmax')
         k = max(-km, min(km, k))
         v = g('m7_entry_guide_speed')
