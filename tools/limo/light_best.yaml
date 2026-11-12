@@ -1,0 +1,7 @@
+# 신호등 라벨 green_light/red_light/yellow_light 모델용 (11-10 부터 통합 모델 sign_best2_1110.pt = best (2), 이전 light_best_1110.pt 도 같은 라벨) — drive.launch light_params:= 로 traffic_light_real.yaml 위에 덮어씀
+# 박스 세로:가로 = 실차 ack5 영상 검출 5–95 % 1.21–3.15 (가운데 1.95) → real.yaml 의 2.5–5 면 대부분 버려짐
+traffic_light:
+  ros__parameters:
+    color_labels: ["red_light", "yellow_light", "green_light"]
+    aspect_min: 1.1
+    aspect_max: 3.4
