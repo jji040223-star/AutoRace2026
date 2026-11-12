@@ -244,6 +244,9 @@ class MissionManager(Node):
         p('m8_ack_assist_deg', 80.0)       #   통로 방향에서 이만큼 돌면 끝
         p('m8_ack_assist_wait_s', 0.4)     #   넘기기 전 이만큼 차선 쌍을 기다림 (한 번이라도 잡히면 보조 안 함)
         p('m8_ack_assist_mod90', False)    # 코너 보조 끝을 트랙 축 기준 90° 단위 방향으로 (출발선 아닌 곳에서 출발해도 맞게). 실차 켬
+        p('m8_ack_assist_target_deg', 999.0)  # 코너 보조 끝 방향 = 트랙 축 + 이 각 (M8 뒤 신호등 직선 = +90). 999 = 안 씀 (mod90).
+        #                                    실차 ack54: 라바콘이 코너 안까지 놓여 끝 쌍을 지날 때 이미 +91° (다 돎) 인데 turn_now 보조가
+        #                                    '45° 넘게 돈 뒤 가까운 90°' 까지 한 번 더 돌아 안쪽 이탈. 이 각을 이미 지났으면 바로 끝
         p('m8_ack_assist_axis_deg', 12.0)  #   트랙 축 (주차 직선 방향) 에서 이 안이면 보조 끝
         p('m8_ack_assist_pair_deg', 20.0)  #   차선 쌍으로 일찍 끝내는 건 트랙 축과 이 각 안일 때만 (g27·r10 +73° 에서 넘겨 바깥선 이탈)
         p('m8_ack_exit_no_left', True)     # 아커만 출구선 맞추기: 출구 방향보다 왼쪽으로 안 넘김 (뒤가 오른쪽 모퉁이)
@@ -2888,7 +2891,13 @@ class MissionManager(Node):
                     # 끝 = 트랙 축 (출발 직선 = 주차 직선 방향) 에서 m8_ack_assist_axis_deg 안 — curvy 배치는 통로 방향이 차로와 ±20°
                     # 어긋나 '통로 방향에서 80°' 는 20° 일찍·늦게 끝남 (다른 세션 검토)
                     ax_err = wrap(self._yaw - wrap(self._yaw0 + self._yaw_drift))
-                    if g('m8_ack_assist_mod90'):
+                    tgt = g('m8_ack_assist_target_deg')
+                    if abs(tgt) <= 360.0:
+                        # 목표 방향과의 차이 (+ = 아직 왼쪽 = 덜 돎). 이미 지났으면 (음수) 다 돈 것으로
+                        ax_err = wrap(ax_err - math.radians(tgt))
+                        if ax_err < 0.0:
+                            ax_err = 0.0
+                    elif g('m8_ack_assist_mod90'):
                         # 트랙 축 기준 90° 단위 중 가장 가까운 방향과의 차이 — 횡단보도 앞 출발이면 축 (그 앞 직선) 이 주차 직선과 90°
                         # 달라 끝 각을 못 만나고 시간까지 돌았음 (실차 11-10 ack18: 끝 +95°). 45° 넘게 돈 뒤에만 (출구 방향도 90° 단위라)
                         ax_err = (ax_err + math.pi / 4) % (math.pi / 2) - math.pi / 4
