@@ -1930,9 +1930,15 @@ class MissionManager(Node):
         if abs(pe) > math.radians(g('m7_entry_guide_deg')) or sd > g('m7_entry_guide_end_m') - 0.3:
             return
         self._m7_entry_used = True
-        ax = self.lane_axis()[0]
+        # 비교는 출발 직선에서 잰 트랙 축 (+ 흐름) 의 90° 단위 방향과 — lane_axis 는 코너 안에서 코너 앞 직선 방향으로 잡혀
+        # 90° 다르다고 나와 안 켜짐 (실차 ack53: 목표 179.4° vs −91.5°)
+        if self._yaw0 is None:
+            self.get_logger().info('[M7 진입] 안 함: 트랙 축을 못 잼 (출발 직선)')
+            return
+        base = wrap(self._yaw0 + self._yaw_drift)
+        ax = wrap(base + round(wrap(th - base) / (math.pi / 2)) * (math.pi / 2))
         if abs(wrap(th - ax)) > math.radians(g('m7_entry_guide_axis_deg')):
-            self.get_logger().info(f'[M7 진입] 안 함: M3 기준 목표 방향 {math.degrees(th):.1f}° 와 차로 방향 {math.degrees(ax):.1f}° 가 '
+            self.get_logger().info(f'[M7 진입] 안 함: M3 기준 목표 방향 {math.degrees(th):.1f}° 와 트랙 축 방향 {math.degrees(ax):.1f}° 가 '
                                    f'{abs(math.degrees(wrap(th - ax))):.1f}° 다름')
             return
         self._m7_entry = {'t': now, 'log': now}
