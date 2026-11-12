@@ -494,6 +494,8 @@ class MissionManager(Node):
         p('m2_min_conf', 0.5)
         p('m2_min_box_px', 12)
         p('m2_confirm_frames', 3)
+        p('m2_weak_fallback', False)       # 확정 (m2_confirm_frames 연속) 못 한 채 장애물을 다 지나면, M7 동안 본 turn_a / turn_b 장 수가 많은 쪽으로
+        #                                    (실차 11-12 ack55: 배치상 표지판이 거의 안 보여 turn_a 2 장만 보고 기본 쪽 B 로 감). real_limo 에서 켬
         p('m2_without_m7', True)           # M7 을 건너뛰어도 (정적 장애물 없음) 3차선에서 표지판 쪽 바깥 차로로 옮겨 갈림길을 따른다
         p('m2_zone_frames', 10)            # 노란 선이 한쪽만 보이는 프레임이 이만큼 연속 → 3차선 구간 (차로 번호: 왼쪽 선 = 맨 왼쪽 차로)
         p('m2_shift_speed', 0.2)           # 차로 옮길 때 속도 [m/s]
@@ -561,7 +563,7 @@ class MissionManager(Node):
         self._m7_hits = 0
         self._m7 = {}
         self._reset_until = 0.0            # 이 시각까지 lane_cmd.reset_window = True
-        self._m2 = {'side': None, 'cand': None, 'n': 0, 'done': False, 'locked': False}   # 갈림길 결과 'A' | 'B', 확인 중인 것, 연속 수, 확정
+        self._m2 = {'side': None, 'cand': None, 'n': 0, 'done': False, 'locked': False, 'weak': {'A': 0, 'B': 0}}   # 갈림길 결과 'A' | 'B', 확인 중인 것, 연속 수, 확정
         self.drive_pub = self.create_publisher(Twist, g('cmd_vel_topic'), 10)
         self.state_pub = self.create_publisher(String, g('state_topic'), 10)
         self.cmd_pub = self.create_publisher(LaneCmd, g('lane_cmd_topic'), 10)
@@ -652,7 +654,7 @@ class MissionManager(Node):
         self._hit_win = {}
         self._resid_hits = self._m7_hits = 0
         self._m3, self._m7, self._obs = {}, {}, []
-        self._m2 = {'side': None, 'cand': None, 'n': 0, 'done': False, 'locked': False}
+        self._m2 = {'side': None, 'cand': None, 'n': 0, 'done': False, 'locked': False, 'weak': {'A': 0, 'B': 0}}
         self._m2z = {'single': 0, 'side_obs': 0, 'zone': None, 'shift': None, 'hold': None, 'both': 0,
                      'dirs': collections.deque(maxlen=60), 'seen_at': None}
         self._yaw0, self._yaw0_buf = None, []
@@ -755,6 +757,8 @@ class MissionManager(Node):
         if m['done'] or m['locked']:
             return
         sides = {g('m2_label_a'): 'A', g('m2_label_b'): 'B'}
+        for sd in {sides[d.label] for d in msg.detections if d.label in sides}:
+            m['weak'][sd] += 1                 # 확정 못 한 채 끝날 때 쓰는 약한 근거 (신뢰도·박스 크기 무관, 프레임당 1)
         hit = [d for d in msg.detections
                if d.label in sides and d.confidence >= g('m2_min_conf') and d.y2 - d.y1 >= g('m2_min_box_px')]
         if not hit:
@@ -2627,6 +2631,14 @@ class MissionManager(Node):
         # 보면 위 끝내기 옮김이 그쪽 끝 차로로. 실차 11-11 ack45: s 3.7 에서 오른쪽 끝 차로로 끝내 차선 추종 (0.3 m/s) 으로 표지판 A 를 한 번도
         # 못 보고 B 길 (ack43·44 는 M7 0.1 m/s 중 s 3.4 근처에서 봄)
         sign_wait = (self.ack() and g('m7_wait_sign') and goal is None and not self._m2['done'] and sc < g('m7_max_m'))
+        if sign_wait and not changing and clear and sc > max(0.3, g('m7_min_exit_m')) and g('m2_weak_fallback'):
+            wk = self._m2['weak']
+            if wk['A'] != wk['B']:
+                side_w = 'A' if wk['A'] > wk['B'] else 'B'
+                self._m2['side'] = side_w
+                self.get_logger().info(f'[M2] 표지판을 확정 못 했지만 본 장 수 A {wk["A"]} / B {wk["B"]} → {side_w} '
+                                       f'({"왼쪽" if side_w == "A" else "오른쪽"} 길, 약한 근거) (s {sc:.2f} m)')
+                return
         if sign_wait and not changing and clear and sc > max(0.3, g('m7_min_exit_m')):
             ctr_k = 1
             if k != ctr_k and not m.get('sign_wait_shift') and window_free(ctr_k, sc - g('m7_enter_window_m'), sf + 0.6):
