@@ -142,7 +142,7 @@ flowchart LR
 
 ```bash
 # PC 에서
-git clone -b final https://github.com/mark2455/AutoRace2026.git && cd AutoRace2026
+git clone -b final https://github.com/mark2455/2026_Autorace.git && cd 2026_Autorace   # 비공개 저장소 — gh auth login 또는 토큰 필요
 rsync -a autorace_ws/src/ wego@<리모IP>:AutoRace2026_sim2d/autorace_ws/src/
 rsync -a tools/limo/ wego@<리모IP>:AutoRace2026_sim2d/        # 실행 스크립트·센서 launch·신호등 모델
 
