@@ -43,7 +43,7 @@
 | 파일 | 내용 |
 |---|---|
 | `teleop_lite_launch.py` | wego `teleop_launch.py` 복사본. EKF 를 빼고 카메라 점구름·IR 을 끔 (우리 노드는 쓰지 않음) |
-| `run_drive.sh` | 주행 시작. `NOBAG=1` 이면 녹화하지 않음 |
+| `run_drive.sh` | 주행 시작. `NOBAG=1` 이면 녹화하지 않음. 시작 때 `jetson_clocks` 로 CPU 클럭 고정 (sudoers 한 번 설정 필요 — 대회장_체크리스트 11-13, 결과는 주행 폴더 `clocks.log`) |
 | `stop_drive.sh` | 주행 즉시 멈춤 |
 | `env.sh` | CUDA·TensorRT·dl_env 환경 + 워크스페이스 |
 | `merge_params.py` | `real_limo.yaml` 에 속도 (`SPEED`) 를 넣어 주행 폴더에 저장 |
