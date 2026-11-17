@@ -58,6 +58,9 @@ DETECTOR_PARAMS = {
     'sw_single_normal': False,          # LIMO 추가 (시험용): 단선 중심을 선의 법선 방향으로 반 차폭. 2D 시뮬에서 3 차선 진입 코너는
                                         # 실차형 카메라에서 8 cm 로 좋아졌지만 기본 카메라는 나빠지고 왼쪽 위 코너 14.5 → 9 cm — 기본은 원본 (가로)
     'stop_line_enabled': False, 'stop_line_min_cov': 0.9, 'stop_line_min_rows': 10, 'stop_line_max_deg': 15.0,
+    # LIMO 추가: 주차 통로 끝 주황 종료선 (M4 칸 격자 확인)
+    'end_line_enabled': False, 'end_line_hsv_lo': [5, 80, 110], 'end_line_hsv_hi': [40, 255, 255],
+    'end_line_min_cov': 0.8, 'end_line_min_rows': 6,
 }
 
 
@@ -251,11 +254,15 @@ class LaneFollower(Node):
                        center_offset_m=center_m, lane_heading_rad=heading, yellow_side=int(r.line_side),
                        lane_width_px=float(r.lane_width_px), width_near_px=float(r.width_near_px),
                        width_far_px=float(r.width_far_px), line_resid_px=float(r.line_resid_px),
-                       stop_line_dist_m=-1.0, stop_line_cov=float(r.stop_cov))
+                       stop_line_dist_m=-1.0, stop_line_cov=float(r.stop_cov),
+                       end_line_dist_m=-1.0, end_line_cov=float(r.end_cov))
         if r.stop_row >= 0 and r.bev_h > 0:
             # BEV 는 바닥 직사각형(카메라 앞 near~far, 좌우 같은 폭)을 그대로 편 것이라 행 ↔ 거리가 선형. 맨 위 행 = far
             near, far = float(g('bev_near_m')), float(g('bev_far_m'))
             st.stop_line_dist_m = far - (r.stop_row + 1) / float(r.bev_h) * (far - near)
+        if r.end_row >= 0 and r.bev_h > 0:
+            near, far = float(g('bev_near_m')), float(g('bev_far_m'))
+            st.end_line_dist_m = far - (r.end_row + 1) / float(r.bev_h) * (far - near)
         self.state_pub.publish(st)
 
     def control(self, r, dt, now):

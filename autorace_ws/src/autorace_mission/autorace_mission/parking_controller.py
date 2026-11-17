@@ -13,6 +13,17 @@
   WAIT       (/parking/start 뒤, 통합 모드) 차선 추종이 몰고 가는 동안 앞옆에 주차 LIMO 가 보이면 APPROACH (mux 는 차선 명령을 고른다)
   APPROACH   approach_speed 로 IMU 방향 유지 + 주차 LIMO 줄과 옆 거리 유지. 차 중심 옆 라이다 (side_probe) 가 가까움 → 멂 → 가까움
              (LIMO → 빈 칸 → LIMO) 이면 빈 폭을 확인하고 칸 가운데 (진행 방향 거리) 와 깊이 (LIMO 끝 + LIMO 반 길이) 를 odom 에 저장
+             [random_slot — 빈 칸이 3 칸 중 아무 데나] 주차 표지판 옆 흰 가로선 (주차 구역 앞 정지선) 을 WAIT 동안 lane_follower
+             정지선 거리로 odom 에 기억 → 선 앞쪽 끝에서 slot_from_line_m + k × slot_pitch_m (대회 맵: 0.745 / 1.265 / 1.785 m) 로
+             칸 격자, 본 LIMO 가운데로 격자를 slot_snap_max_m 안에서 맞춤. 빈 칸 판정:
+               (1) 칸 하나 (가운데 ±slot_free_half_m) 를 차 중심 옆 라이다가 다 지나도록 '멂' 만 → 그 칸 (첫 칸이 빈 경우)
+               (2) 나머지 칸에 LIMO 가 다 있음 → 남은 칸 (마지막 칸이 빈 경우, 2 번 LIMO 를 지나자마자)
+               (3) 가운데 칸은 (1) 또는 기존 LIMO → 빈 칸 → LIMO
+             선을 못 봤으면 마지막 LIMO 뒤가 end_open_m 넘게 비면 그 다음 칸 (경고). 끝 칸은 이웃 LIMO 가 한쪽뿐이라
+             MEASURE·ENTER·EXIT 의 옆 맞춤을 그 LIMO 옆면 − (slot_pitch_m − limo_half_w) 로 (반대쪽 점은 안 봄)
+  END_CHECK  [random_slot + end_check] 빈 칸을 정한 뒤 통로 끝 주황 종료선 (경기 종료선, 마지막 칸 가운데 + end_to_last_m) 이
+             lane_follower 에 보일 때까지 전진해 거리를 잼 → 종료선 기준 칸 가운데 (1.775 / 1.255 / 0.735 m 앞) 와 흰선 기준이
+             end_check_tol_m 넘게 다르면 종료선 값을 씀 (가까이서 잰 값이라 오도메트리 누적이 적음). 못 보면 흰선 값 (경고)
   ALIGN      차 중심을 칸 가운데선으로 (앞뒤로), 제자리 회전 반경 (0.194 m) + 여유를 쓸기 검사로 확인
   ROTATE_IN  IMU 로 제자리 90° (±rot_tol_deg, 목표 근처 감속)
   MEASURE    돌면서 위치가 밀리므로 라이다로 다시 잼 — 양옆 LIMO 안쪽 면의 가운데 (옆 오차) 와 면 방향. 옆 오차가 크면 돌아 나와 ALIGN 부터
@@ -77,6 +88,34 @@ class ParkingController(Node):
         p('gap_min_m', 0.45)               # 빈 칸 폭 (LIMO 옆면 사이) 최소 — 차 폭 0.22 + 여유
         p('gap_blip_ok', False)            # 칸을 재는 중 짧은 물체가 잡혀도 칸 재기를 이어감 (실차 ack45, real_limo 에서 켬)
         p('gap_max_m', 1.30)
+        # 빈 칸 랜덤 (3 칸 중 하나). 값은 대회 맵 PDF (판 10 × 6 m) 에서 잼: 주차 정지선 x 5610–5650 mm, 칸 안쪽 500 × 600,
+        # 칸 가운데 6355 / 6875 / 7395, 통로 막다른 끝 8130
+        p('random_slot', True)             # false = 기존 (LIMO → 빈 칸 → LIMO 만)
+        p('slot_count', 3)
+        p('slot_pitch_m', 0.52)            # 칸 폭 0.50 + 칸 선 0.02
+        p('slot_from_line_m', 0.745)       # 주차 정지선 앞쪽 (차 쪽) 끝 → 1 번 칸 가운데
+        p('slot_line_min_m', 0.3)          # 기준선 = WAIT 에서 처음 본 LIMO 점보다 이만큼~
+        p('slot_line_max_m', 2.0)          #   이만큼 앞의 흰 가로선 (횡단보도 뒤 가로선은 ≥ 2.47 m 라 빠짐)
+        p('slot_line_match_m', 0.10)       # 같은 선으로 볼 거리
+        p('slot_match_m', 0.15)            # LIMO 가운데 ↔ 칸 가운데 이 안이면 그 칸에 LIMO
+        p('slot_snap_max_m', 0.10)         # 본 LIMO 로 격자를 옮기는 최대
+        p('slot_free_half_m', 0.20)        # 빈 칸 확인 구간 = 칸 가운데 ± 이것 (칸 안쪽 반폭 0.25)
+        p('slot_free_min_n', 3)            #   그 구간 스캔 수 최소
+        p('slot_free_ratio', 0.8)          #   그중 '멂' 비율 (가까움은 하나도 없어야)
+        p('slot_end_guard_m', 0.40)        # 마지막 칸 가운데를 이만큼 지나도 못 정하면 가장 비어 보인 칸 (막다른 끝 = 마지막 칸 + 0.735)
+        p('end_open_m', 0.90)              # 선을 못 봤을 때: 마지막 LIMO 뒤가 이만큼 비면 그 다음 칸 (가운데 칸이 빈 틈 0.822 보다 길게)
+        p('limo_half_w', 0.109)            # 주차 LIMO 반폭 — 끝 칸 옆 맞춤: 이웃 옆면 → 칸 가운데 = slot_pitch_m − 이것 (0.411)
+        p('side_one_tol_m', 0.15)          # 한쪽 옆면으로 잰 칸 가운데 옆 오차가 이보다 크면 안 믿음
+        # 통로 끝 주황 종료선으로 칸 격자 확인 (end_check). 대회 맵: 통로 막다른 끝 x 8130, 3 번 칸 가운데 7395 → 0.735
+        p('end_check', True)               # 빈 칸을 정한 뒤 종료선까지 가서 거리 확인 (항상)
+        p('end_to_last_m', 0.735)          # 종료선 앞쪽 끝 → 마지막 칸 가운데
+        p('end_check_tol_m', 0.08)         # 흰선 기준과 이보다 더 다르면 종료선 기준 칸 가운데를 씀
+        p('end_check_n', 3)                # 종료선을 이만큼 본 뒤 (중앙값) 멈춤
+        p('end_check_gate_m', 0.40)        # 흰선 격자로 예상한 종료선 위치 ± 이것 밖에서 본 주황 가로선은 무시
+        p('end_stop_m', 0.45)              # 종료선을 못 봐도 차 중심이 (예상) 종료선 이만큼 앞에 오면 멈춤 (앞 범퍼 ~0.29 m)
+        p('end_check_speed', 0.10)
+        p('end_check_timeout_s', 15.0)
+        p('bay_depth_default_m', 0.570)    # LIMO 면을 못 쟀을 때 차 중심 (통로 가운데) → 칸 깊이 가운데
         p('limo_half_l', 0.161)            # 이웃 LIMO 반 길이 (끝면 → 칸 깊이 가운데)
         p('align_tol_m', 0.008)
         p('align_speed', 0.06)
@@ -189,6 +228,17 @@ class ParkingController(Node):
         self.rot_settled, self.rot_coast = False, None
         self.align_rot = False             # ALIGN 방향 게이트 안 (래치)
         self.scan_t = None                 # 마지막 스캔의 메시지 시각 (칸 폭 잴 때 그 시각 위치)
+        # random_slot
+        self.zone_lines = []               # WAIT·APPROACH 동안 본 흰 가로선 [(x, y, yaw)] odom (앞쪽 끝)
+        self.first_limo_xy = None          # WAIT 에서 처음 본 주차 LIMO 의 가장 가까운 점 (odom)
+        self.wait_face = []                # WAIT 에서 본 LIMO 면까지 옆 거리
+        self.limos = []                    # APPROACH 에서 지난 LIMO [(시작, 끝)] 진행 거리
+        self.side_log = []                 # [(진행 거리, 가까움, 멂)] 스캔마다
+        self.face_d = []                   # 가까움일 때 옆 거리 (깊이 계산)
+        self.slot_s = None                 # 마지막 계산한 칸 가운데 [진행 거리] (마커)
+        self._slot_logged = False
+        self.end_plan = None               # END_CHECK: 흰선으로 정한 칸 {'k', 's', 'c', 'depth', 'nb', 'why'}
+        self.end_meas = []                 # 본 종료선 진행 거리
 
     # ---------------------------------------------------------------- 입력
     def on_start(self, _msg):
@@ -244,12 +294,39 @@ class ParkingController(Node):
         self.scan_t = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9 + self.get_parameter('scan_t_offset').value * msg.scan_time
 
     def on_lane(self, msg):
+        if self.state == 'END_CHECK' and getattr(msg, 'end_line_dist_m', -1.0) > 0 and self.end_plan is not None:
+            pose = self.pose_at(stamp_s(msg.header))
+            if pose is not None:
+                d = msg.end_line_dist_m + self.get_parameter('cam_x').value
+                e = self.along((pose[0] + d * math.cos(pose[2]), pose[1] + d * math.sin(pose[2])))
+                exp = self.end_plan.get('e_exp')
+                if exp is not None and abs(e - exp) > self.get_parameter('end_check_gate_m').value:
+                    self.get_logger().warn(f'[M4] 주황 가로선 진행 {e:.3f} m — 예상 종료선 {exp:.3f} m 에서 멀어 무시 (덮은 비율 {msg.end_line_cov:.2f})')
+                else:
+                    if not self.end_meas:
+                        self.get_logger().info(f'[M4] 주황 종료선 보임: 차 중심 앞 {d:.3f} m, 진행 {e:.3f} m (덮은 비율 {msg.end_line_cov:.2f})')
+                    self.end_meas.append(e)
         if self.state in ('ENTER', 'CHECK') and msg.stop_line_dist_m > 0 and self.bay is not None:
             pose = self.pose_at(stamp_s(msg.header))
             first = self.line.pt is None
             if self.line.update(pose, msg.stop_line_dist_m + self.get_parameter('cam_x').value) and first:
                 self.get_logger().info(f'[M4] 칸 끝선 보임: 차 중심에서 {msg.stop_line_dist_m + self.get_parameter("cam_x").value:.3f} m '
                                        f'(덮은 비율 {msg.stop_line_cov:.2f})')
+        elif self.state in ('WAIT', 'APPROACH') and msg.stop_line_dist_m > 0 and self.get_parameter('random_slot').value:
+            pose = self.pose_at(stamp_s(msg.header))
+            if pose is not None:
+                self.add_zone_line(pose, msg.stop_line_dist_m + self.get_parameter('cam_x').value, msg.stop_line_cov)
+
+    def add_zone_line(self, pose, dist, cov):
+        """주차 구역 앞 흰 가로선 후보를 odom 에 기억 (가까이서 잰 값으로 갱신 — 멀리서 잰 것보다 정확)."""
+        x, y, yaw = pose
+        pt = (x + dist * math.cos(yaw), y + dist * math.sin(yaw), yaw)
+        for i, q in enumerate(self.zone_lines):
+            if math.dist(pt[:2], q[:2]) < self.get_parameter('slot_line_match_m').value:
+                self.zone_lines[i] = pt
+                return
+        self.zone_lines.append(pt)
+        self.get_logger().info(f'[M4] 흰 가로선 기억: 차 중심 앞 {dist:.3f} m (덮은 비율 {cov:.2f}), odom ({pt[0]:.2f}, {pt[1]:.2f})')
 
     # ---------------------------------------------------------------- 도움
     def now(self):
@@ -452,6 +529,11 @@ class ParkingController(Node):
             self.result_pub.publish(String(data=self.result))
             self.done_pub.publish(Empty())
             return True
+        if self.state == 'END_CHECK' and self.end_plan is not None:
+            # 종료선 확인하러 가다 막힘 (앞 장애물) — 흰선 기준 칸으로 정렬
+            p = self.end_plan
+            self.set_bay(now, p['c'], p['depth'], p['nb'], f'{p["why"]}, 종료선 확인 중 막힘 ({why}) → 흰선 기준 칸 가운데')
+            return True
         if self.state == 'ARC_FWD':
             self.pub(0.0, 0.0)
             self.set_state('ARC_OUT', f'짧게 전진 중 막힘: {why} → 다시 후진 원호 ({self.retry} 번째)')
@@ -527,9 +609,18 @@ class ParkingController(Node):
                 # 차선 추종을 놓아 코너에서 직진해 나간 일 (실차 11-05)
                 ok = n >= g('wait_min_pts') and ext >= g('wait_min_len_m')
                 self._wait_hits = self._wait_hits + 1 if ok else 0
+                if ok:
+                    self.wait_face.append(float(np.percentile(self.sgn * y[sel], 20)))
                 if self._wait_hits >= g('wait_confirm'):
                     self.h0, self.start_xy, self.t0 = self.heading(), self.pose[:2], now
+                    i = int(np.argmin(np.where(sel, x, np.inf)))
+                    px, py, pyaw = self.pose
+                    self.first_limo_xy = (px + x[i] * math.cos(pyaw) - y[i] * math.sin(pyaw),
+                                          py + x[i] * math.sin(pyaw) + y[i] * math.cos(pyaw))
                     self.set_state('APPROACH', f'앞옆에 주차 LIMO (점 {n} 개, 앞뒤 {ext:.2f} m, {self._wait_hits} 번 연속)')
+            return
+        if s == 'END_CHECK':
+            self.do_end_check(now)
             return
         if s == 'APPROACH':
             self.do_approach(now)
@@ -630,6 +721,7 @@ class ParkingController(Node):
                 else:
                     pr['phase'], pr['far0'] = 'far', a
                     pr.pop('prev_far0', None)
+                    self.limos.append((pr.get('near0', a), a))
                     self.get_logger().info(f'[M4] 옆: 가까움 → 멂 (LIMO 끝, 길이 {ln:.3f} m, 진행 {a:.3f} m, '
                                            f'LIMO 끝면까지 {np.median(pr["near_d"]):.3f} m)')
         elif pr['phase'] == 'far' and near:
@@ -640,14 +732,7 @@ class ParkingController(Node):
                 pr['near_d'].append(d)
                 depth = float(np.median(pr['near_d'])) + g('limo_half_l')
                 c_along = (pr['far0'] + pr['far1']) / 2
-                axis = wrap(self.h0 + self.sgn * math.pi / 2)
-                lat0 = self.lateral()
-                cx = self.start_xy[0] + c_along * math.cos(self.h0) - lat0 * math.sin(self.h0) + depth * math.cos(axis)
-                cy = self.start_xy[1] + c_along * math.sin(self.h0) + lat0 * math.cos(self.h0) + depth * math.sin(axis)
-                self.bay = {'c': (cx, cy), 'axis': axis, 'along': c_along, 'gap': w, 'depth': depth}
-                self.set_state('ALIGN', f'빈 칸: LIMO 옆면 사이 {w:.3f} m, 칸 가운데 진행 {c_along:.3f} m, 깊이 (LIMO 끝 + 반 길이) '
-                                        f'{depth:.3f} m, odom ({cx:.2f}, {cy:.2f}) — 시작 뒤 {now - self.t0:.1f} s')
-                self.pub(0.0, 0.0)
+                self.set_bay(now, c_along, depth, ('l', 'r'), f'빈 칸: LIMO 옆면 사이 {w:.3f} m', gap=w)
                 return
             if w < g('gap_min_m'):
                 pr['prev_far0'] = pr['far0']   # 칸보다 짧은 틈 = 칸 안 물체일 수 있음 — 그게 짧으면 이 칸을 이어서 잼 (gap_blip_ok)
@@ -655,6 +740,11 @@ class ParkingController(Node):
             self.get_logger().info(f'[M4] 틈 {w:.3f} m — 칸 폭이 아님, 다음 틈을 찾음')
         if new_scan:
             pr['a_prev'], pr['scan_t'], pr['a_edge'] = a_now, self.scan_t, a
+            self.side_log.append((a_now, near, far))
+            if near:
+                self.face_d.append(d)
+        if g('random_slot') and self.try_slot(now, a_now):
+            return
         if near and self.row_ref is None:
             self.row_ref = d
         # 방향 유지 (IMU) + 주차 LIMO 줄과 옆 거리 유지 (가까움 구간에서만)
@@ -671,6 +761,175 @@ class ParkingController(Node):
         if self.stuck(now, v, w):
             return
         self.pub(v, max(-0.4, min(0.4, w)))
+
+    # ---------------------------------------------------------------- 빈 칸 랜덤 (random_slot)
+    def set_bay(self, now, c_along, depth, nb, why, gap=None):
+        """칸 가운데 (진행 거리 c_along, 통로에서 깊이 depth) 를 odom 에 두고 ALIGN. nb = 이웃 LIMO 가 있는 쪽 ('l', 'r' — 칸을 향했을 때)."""
+        axis = wrap(self.h0 + self.sgn * math.pi / 2)
+        lat0 = self.lateral()
+        cx = self.start_xy[0] + c_along * math.cos(self.h0) - lat0 * math.sin(self.h0) + depth * math.cos(axis)
+        cy = self.start_xy[1] + c_along * math.sin(self.h0) + lat0 * math.cos(self.h0) + depth * math.sin(axis)
+        self.bay = {'c': (cx, cy), 'axis': axis, 'along': c_along, 'gap': gap, 'depth': depth, 'nb': tuple(nb)}
+        self.set_state('ALIGN', f'{why}, 칸 가운데 진행 {c_along:.3f} m (지금 {self.along():.3f}), 깊이 {depth:.3f} m, '
+                                f'이웃 LIMO {"양쪽" if len(nb) == 2 else ("왼쪽" if "l" in nb else "오른쪽") if nb else "없음"}, '
+                                f'odom ({cx:.2f}, {cy:.2f}) — 시작 뒤 {now - self.t0:.1f} s')
+        self.pub(0.0, 0.0)
+
+    def slot_depth(self):
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        if len(self.face_d) >= 3:
+            return float(np.median(self.face_d)) + g('limo_half_l'), 'LIMO 면'
+        if self.wait_face:
+            return float(np.median(self.wait_face)) + g('limo_half_l'), 'WAIT LIMO 면'
+        return g('bay_depth_default_m'), '맵 값'
+
+    def side_of(self, step):
+        """진행 방향으로 step (+1 앞 / −1 뒤) 칸이 칸을 향했을 때 어느 쪽인지. 오른쪽 칸 (sgn −1): 앞 = 왼쪽."""
+        return 'l' if step * -self.sgn > 0 else 'r'
+
+    def slot_centers(self):
+        """기준선에서 칸 가운데 [진행 거리] 목록 (본 LIMO 로 맞춤) 과 선 진행 거리. 기준선이 없으면 None."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        if self.first_limo_xy is None or not self.zone_lines:
+            return None
+        fa = self.along(self.first_limo_xy)
+        cands = [self.along(q) for q in self.zone_lines if g('slot_line_min_m') <= fa - self.along(q) <= g('slot_line_max_m')]
+        if not cands:
+            return None
+        line = max(cands)                  # LIMO 에 가장 가까운 선
+        n, pitch = int(g('slot_count')), g('slot_pitch_m')
+        s = [line + g('slot_from_line_m') + k * pitch for k in range(n)]
+        offs = []
+        for a0, a1 in self.limos:
+            c = 0.5 * (a0 + a1)
+            k = int(round((c - s[0]) / pitch))
+            if 0 <= k < n and abs(c - s[k]) <= g('slot_match_m'):
+                offs.append(c - s[k])
+        if offs:
+            o = max(-g('slot_snap_max_m'), min(g('slot_snap_max_m'), float(np.median(offs))))
+            s = [v + o for v in s]
+        return s, line
+
+    def try_slot(self, now, a_now):
+        """빈 칸이 첫 칸·마지막 칸이어도 고름. 정했으면 True (ALIGN 으로 넘어감)."""
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        n, pitch = int(g('slot_count')), g('slot_pitch_m')
+        r = self.slot_centers()
+        if r is None:
+            # 기준선 없음 → 마지막 LIMO 뒤가 end_open_m 넘게 비면 그 다음 칸 (첫 칸이 빈 경우는 틀릴 수 있음)
+            pr = self.prof
+            if pr['phase'] == 'far' and self.limos and a_now - pr['far0'] >= g('end_open_m'):
+                a0, a1 = self.limos[-1]
+                depth, src = self.slot_depth()
+                self.get_logger().warn(f'[M4] 주차 정지선을 못 봄 — 마지막 LIMO 뒤 {a_now - pr["far0"]:.2f} m 비어 그 다음 칸으로 '
+                                       f'(LIMO {len(self.limos)} 대 봄, 첫 칸이 빈 경우면 틀림)')
+                self.to_end_check(now, None, None, 0.5 * (a0 + a1) + pitch, depth, (self.side_of(-1),),
+                                  f'빈 칸 (선 없이 마지막 LIMO 다음, 깊이 {src})')
+                return True
+            return False
+        s, line = r
+        self.slot_s = s
+        if not self._slot_logged:
+            self._slot_logged = True
+            self.get_logger().info(f'[M4] 칸 격자: 주차 정지선 진행 {line:.3f} m → 칸 가운데 '
+                                   + ' / '.join(f'{v:.3f}' for v in s) + f' m (지금 {a_now:.3f})')
+        occ = [False] * n
+        for a0, a1 in self.limos:
+            c = 0.5 * (a0 + a1)
+            k = int(round((c - s[0]) / pitch))
+            if 0 <= k < n and abs(c - s[k]) <= g('slot_match_m'):
+                occ[k] = True
+        half = g('slot_free_half_m')
+        stats = []
+        pick, why = None, ''
+        for k in range(n):
+            smp = [(nr, fr) for a, nr, fr in self.side_log if s[k] - half <= a <= s[k] + half]
+            nn = sum(1 for nr, _ in smp if nr)
+            fr = sum(1 for _, f in smp if f) / len(smp) if smp else 0.0
+            stats.append((len(smp), nn, fr))
+            if pick is None and not occ[k] and a_now >= s[k] + half and len(smp) >= g('slot_free_min_n') \
+                    and nn == 0 and fr >= g('slot_free_ratio'):
+                pick, why = k, f'{k + 1} 번 칸을 다 지나도록 비어 있음 (스캔 {len(smp)} 번, 멂 {fr * 100:.0f} %)'
+        if pick is None and sum(occ) == n - 1:
+            k = occ.index(False)
+            pick, why = k, f'나머지 칸에 LIMO → {k + 1} 번 칸'
+        if pick is None and a_now > s[-1] + g('slot_end_guard_m'):
+            # 구역을 다 지났는데 못 정함 → 가까움이 가장 적고 멂이 가장 많은 칸 (막다른 끝 전에)
+            k = min(range(n), key=lambda i: (occ[i], stats[i][1], -stats[i][2]))
+            pick, why = k, '구역을 지나도 못 정함 → 가장 비어 보인 칸'
+            self.get_logger().warn(f'[M4] {why}: {k + 1} 번 (칸별 LIMO {occ}, 스캔·가까움·멂 {stats})')
+        if pick is None:
+            return False
+        nb = tuple(self.side_of(st) for st in (-1, 1) if 0 <= pick + st < n and occ[pick + st])
+        depth, src = self.slot_depth()
+        self.to_end_check(now, pick, s, s[pick], depth, nb,
+                          f'빈 칸 {pick + 1}/{n} ({why}, 칸별 LIMO {["O" if o else "-" for o in occ]}, 깊이 {src})')
+        return True
+
+    def to_end_check(self, now, k, s, c, depth, nb, why):
+        """흰선 (또는 LIMO) 으로 정한 칸 → end_check 면 종료선까지 가서 확인, 아니면 바로 ALIGN."""
+        g = lambda k_: self.get_parameter(k_).value   # noqa: E731
+        if not g('end_check'):
+            self.set_bay(now, c, depth, nb, why)
+            return
+        n, pitch = int(g('slot_count')), g('slot_pitch_m')
+        # 예상 종료선 진행 거리: 흰선 격자의 마지막 칸 + end_to_last_m (격자가 없으면 이 칸이 마지막 칸이라고 보고)
+        e_exp = (s[-1] if s else c) + g('end_to_last_m')
+        self.end_plan = {'k': k, 's': list(s) if s else None, 'c': c, 'depth': depth, 'nb': nb, 'why': why, 'e_exp': e_exp}
+        if s is None:
+            self.end_plan['e_exp'] = None      # 격자 없음: 어느 칸인지 몰라 위치 거르기 안 함, 멈춤 한도는 칸 하나 더 멀리
+            self.end_plan['limit'] = c + (n - 1) * pitch + g('end_to_last_m') - g('end_stop_m')
+        else:
+            self.end_plan['limit'] = e_exp - g('end_stop_m')
+        self.end_meas = []
+        self.pub(0.0, 0.0)
+        self.set_state('END_CHECK', f'{why} — 흰선 기준 칸 가운데 진행 {c:.3f} m, 통로 끝 주황 종료선 확인하러 감 '
+                                    f'(예상 진행 {e_exp:.3f} m, 지금 {self.along():.3f})')
+
+    def do_end_check(self, now):
+        """종료선이 보일 때까지 전진 (IMU 방향 유지) → 종료선 기준 칸 가운데와 비교해 ALIGN."""
+        g = lambda k_: self.get_parameter(k_).value   # noqa: E731
+        p = self.end_plan
+        n, pitch = int(g('slot_count')), g('slot_pitch_m')
+        c, why = p['c'], p['why']
+        if len(self.end_meas) >= g('end_check_n'):
+            e = float(np.median(self.end_meas[-int(g('end_check_n')):]))
+            s_end = [e - g('end_to_last_m') - (n - 1 - i) * pitch for i in range(n)]
+            k = p['k'] if p['k'] is not None else min(range(n), key=lambda i: abs(s_end[i] - c))
+            diff = s_end[k] - c
+            self.slot_s = s_end
+            if abs(diff) > g('end_check_tol_m'):
+                self.get_logger().warn(f'[M4] 종료선 기준 {k + 1} 번 칸 가운데 {s_end[k]:.3f} m ↔ 흰선 기준 {c:.3f} m: '
+                                       f'{diff * 100:+.1f} cm 다름 (> {g("end_check_tol_m") * 100:.0f} cm) → 종료선 값 씀')
+                c, src = s_end[k], f'종료선 기준 (흰선과 {diff * 100:+.1f} cm)'
+            else:
+                src = f'흰선 기준 (종료선과 {diff * 100:+.1f} cm, 맞음)'
+            self.set_bay(now, c, p['depth'], p['nb'], f'{why}, 칸 가운데 {src}')
+            return
+        if self.along() >= p['limit'] or now - self.phase_t > g('end_check_timeout_s'):
+            self.get_logger().warn(f'[M4] 주황 종료선을 못 봄 (본 장 수 {len(self.end_meas)}, 진행 {self.along():.3f} / 한도 {p["limit"]:.3f} m, '
+                                   f'{now - self.phase_t:.1f} s) → 흰선 기준 칸 가운데 그대로')
+            self.set_bay(now, c, p['depth'], p['nb'], f'{why}, 칸 가운데 흰선 기준 (종료선 못 봄)')
+            return
+        w = 1.5 * wrap(self.h0 - self.heading())
+        v = g('end_check_speed')
+        if self.stuck(now, v, w):
+            return
+        self.pub(v, max(-0.4, min(0.4, w)))
+
+    def bay_err(self, yl, yr):
+        """칸 가운데가 차 왼쪽으로 얼마 [m] (양옆 LIMO 면에서). 이웃이 양쪽이면 기존대로 가운데, 한쪽이면 그 옆면 − 0.411."""
+        nb = self.bay.get('nb', ('l', 'r'))
+        if 'l' in nb and 'r' in nb:
+            return (yl + yr) / 2 if (yl is not None and yr is not None) else None
+        g = lambda k: self.get_parameter(k).value   # noqa: E731
+        hg = g('slot_pitch_m') - g('limo_half_w')
+        cand = []
+        if 'l' in nb and yl is not None and abs(yl - hg) <= g('side_one_tol_m'):
+            cand.append(yl - hg)
+        if 'r' in nb and yr is not None and abs(yr + hg) <= g('side_one_tol_m'):
+            cand.append(yr + hg)
+        return float(np.mean(cand)) if cand else None
 
     def do_align(self, now):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
@@ -735,16 +994,18 @@ class ParkingController(Node):
         g = lambda k: self.get_parameter(k).value   # noqa: E731
         self.pub(0.0, 0.0)
         yl, yr = self.faces(0.15, 0.9)
-        if yl is not None and yr is not None:
-            self.meas.append((yl, yr))
+        e1 = self.bay_err(yl, yr)
+        if e1 is not None:
+            self.meas.append((e1, yl if yl is not None else float('nan'), yr if yr is not None else float('nan')))
         if now - self.phase_t < g('measure_s'):
             return
         if len(self.meas) < 3:
-            self.get_logger().warn('[M4] 다시 재기: 양옆 LIMO 면이 안 보임 — 처음 잰 칸 가운데로 들어감')
+            self.get_logger().warn('[M4] 다시 재기: 이웃 LIMO 면이 안 보임 — 처음 잰 칸 가운데로 들어감')
             e = 0.0
         else:
-            yl, yr = np.median(np.array(self.meas), axis=0)
-            e = float((yl + yr) / 2)       # 칸 가운데가 차 왼쪽으로 e
+            M = np.array(self.meas)
+            med = lambda c: float(np.median(c[np.isfinite(c)])) if np.isfinite(c).any() else float('nan')   # noqa: E731
+            e, yl, yr = med(M[:, 0]), med(M[:, 1]), med(M[:, 2])   # 칸 가운데가 차 왼쪽으로 e
             # 칸 가운데선을 다시 잰 값으로 (odom)
             a = self.bay['axis']
             lx, ly = -math.sin(a), math.cos(a)        # 칸 축 왼쪽
@@ -962,7 +1223,9 @@ class ParkingController(Node):
             self.set_state('CHECK', f'칸 깊이 가운데 ({src} 기준, 남은 {remain * 100:+.1f} cm), 들어간 거리 {self.enter_len:.2f} m')
             return
         yl, yr = self.faces(-0.2, 0.35)
-        e = (yl + yr) / 2 if (yl is not None and yr is not None) else -self.bay_frame()[1]
+        e = self.bay_err(yl, yr)
+        if e is None:
+            e = -self.bay_frame()[1]
         herr = wrap(self.bay['axis'] - self.heading())
         w = g('enter_k_lat') * e + g('enter_k_head') * herr
         w = max(-g('enter_max_w'), min(g('enter_max_w'), w))
@@ -1044,7 +1307,9 @@ class ParkingController(Node):
                 self.set_state('ROTATE_OUT', f'후진 끝 (들어간 {self.enter_len:.2f} m 만큼, 들어가기 시작한 자리에서 {back * 100:.1f} cm) → 반대 90°')
             return
         yl, yr = self.faces(-0.35, 0.2)
-        e = (yl + yr) / 2 if (yl is not None and yr is not None) else -self.bay_frame()[1]
+        e = self.bay_err(yl, yr)
+        if e is None:
+            e = -self.bay_frame()[1]
         herr = wrap(self.bay['axis'] - self.heading())
         # 후진: 칸 축 방향은 그대로 두고 (방향 오차만 보정), 옆 오차는 반대 부호로 조금
         w = g('enter_k_head') * herr - 0.5 * g('enter_k_lat') * e
@@ -1080,6 +1345,17 @@ class ParkingController(Node):
         car = mk(1, Marker.LINE_STRIP, (0.2, 0.6, 1.0, 1.0), 0.01)
         car.points = rect(self.pose[0], self.pose[1], self.pose[2], HL, HW)
         ma.markers.append(car)
+        if self.slot_s is not None and self.h0 is not None:
+            # 칸 격자 (회색) — 깊이는 지금 쓰는 값
+            depth = self.slot_depth()[0]
+            axis = wrap(self.h0 + self.sgn * math.pi / 2)
+            lat0 = self.lateral()
+            for k, c_along in enumerate(self.slot_s):
+                sx = self.start_xy[0] + c_along * math.cos(self.h0) - lat0 * math.sin(self.h0) + depth * math.cos(axis)
+                sy = self.start_xy[1] + c_along * math.sin(self.h0) + lat0 * math.cos(self.h0) + depth * math.sin(axis)
+                sm = mk(20 + k, Marker.LINE_STRIP, (0.6, 0.6, 0.6, 0.8), 0.006)
+                sm.points = rect(sx, sy, axis, g('bay_d') / 2, g('bay_w') / 2)
+                ma.markers.append(sm)
         if self.bay is not None:
             cx, cy = self.bay['c']
             a = self.bay['axis']

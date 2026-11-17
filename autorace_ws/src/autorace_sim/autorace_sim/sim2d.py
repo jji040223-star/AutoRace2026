@@ -173,6 +173,7 @@ class Sim2D(Node):
         p('static_layout', 'default')       # default (첫 줄 차로 0 으로 진입) | mirror (차로 2 로 진입)
         p('static_layout_xy', [0.0])        # 직접 배치 [x1, y1, x2, y2, ...] (yaw 180) — 길이 2 이상이면 static_layout 대신 (랜덤 간격 시험)
         p('parking_limos', True)
+        p('parking_empty_slot', 2)         # 빈 주차 칸 1 | 2 | 3 (칸 가운데 x 6.355 / 6.875 / 7.395), 0 = 리셋마다 무작위
         p('cones', True)
         p('cone_layout', 'default')
         p('traffic_light', True)
@@ -332,7 +333,10 @@ class Sim2D(Node):
             for i, (x, y, yaw) in enumerate(layout):
                 self.boxes.append(Box('limo', x, y, math.radians(yaw), name=f'M7_LIMO_{i}', **limo))
         if g('parking_limos'):
-            for i, (x, y, yaw) in enumerate([[6.36, 4.27, -90], [7.40, 4.27, -90]]):
+            empty = int(g('parking_empty_slot')) or self.rng.choice([1, 2, 3])
+            self.parking_empty = empty
+            slots = [x for k, x in enumerate([6.355, 6.875, 7.395], 1) if k != empty]
+            for i, (x, y, yaw) in enumerate([[x, 4.27, -90] for x in slots]):
                 self.boxes.append(Box('limo', x, y, math.radians(yaw), name=f'M4_LIMO_{i}', **limo))
         if g('cones'):
             base = dict(start=[0.72, 2.05], heading=90, pairs=7, pitch=0.30, half_gap=0.25, sway=0.12, sway_period=1.8)
@@ -870,8 +874,8 @@ class Sim2D(Node):
         m.distortion_model = 'plumb_bob'
         m.d = [0.0] * 5
         m.k = self.K.flatten().tolist()
-        m.r = [1.0, 0, 0, 0, 1.0, 0, 0, 0, 1.0]
-        m.p = [self.K[0, 0], 0.0, self.K[0, 2], 0.0, 0.0, self.K[1, 1], self.K[1, 2], 0.0, 0.0, 0.0, 1.0, 0.0]
+        m.r = [1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0]
+        m.p = [float(v) for v in [self.K[0, 0], 0.0, self.K[0, 2], 0.0, 0.0, self.K[1, 1], self.K[1, 2], 0.0, 0.0, 0.0, 1.0, 0.0]]
         return m
 
     def publish_camera(self, st, want_depth):

@@ -44,3 +44,32 @@ parking_controller:
     stuck_s: 1.0                        # 움직이라는데 이만큼 못 움직이면 정렬부터 다시
     max_retry: 3
     laser_x: 0.103
+
+    # ---- 빈 칸 랜덤 (3 칸 중 하나) — 대회 맵 PDF 값 (판 10 × 6 m, 오차 ±2 mm) ----
+    # 주차 정지선 (주차 표지판 옆 흰 가로선) x 5610–5650 mm, 칸 안쪽 500 × 600, 칸 선 20, 칸 가운데 6355 / 6875 / 7395, 막다른 끝 8130
+    random_slot: true                   # false = 기존 (LIMO → 빈 칸 → LIMO 만, 가운데 칸만 됨)
+    slot_count: 3
+    slot_pitch_m: 0.52                  # 칸 폭 0.50 + 칸 선 0.02
+    slot_from_line_m: 0.745             # 주차 정지선 앞쪽 끝 → 1 번 칸 가운데 (2 번 1.265, 3 번 1.785)
+    slot_line_min_m: 0.3                # 기준선 = 처음 본 LIMO 점보다 0.3~2.0 m 앞 흰 가로선 (횡단보도 뒤 가로선은 2.47 m 이상이라 빠짐)
+    slot_line_max_m: 2.0
+    slot_match_m: 0.15                  # LIMO 가운데 ↔ 칸 가운데 이 안이면 그 칸에 LIMO
+    slot_snap_max_m: 0.10               # 본 LIMO 로 칸 격자를 옮기는 최대
+    slot_free_half_m: 0.20              # 빈 칸 확인 구간 = 칸 가운데 ± 이것
+    slot_free_min_n: 3
+    slot_free_ratio: 0.8
+    slot_end_guard_m: 0.40              # 마지막 칸 가운데 + 이것까지 못 정하면 가장 비어 보인 칸 (막다른 끝은 + 0.735)
+    end_open_m: 0.90                    # 선을 못 봤을 때만: 마지막 LIMO 뒤가 이만큼 비면 다음 칸 (가운데 칸이 빈 틈 0.822 보다 길게)
+    limo_half_w: 0.109                  # 끝 칸 옆 맞춤: 이웃 LIMO 옆면 → 칸 가운데 0.52 − 0.109 = 0.411 m
+    side_one_tol_m: 0.15
+    # ---- 통로 끝 주황 종료선으로 칸 위치 확인 (end_check) — 빈 칸을 정한 뒤 종료선이 보일 때까지 전진해 거리를 잼 ----
+    # 대회 맵: 통로 막다른 끝 x 8130, 3 번 칸 가운데 7395 → 종료선 앞 1.775 / 1.255 / 0.735 m 가 칸 가운데
+    end_check: true                     # false = 흰선 기준만 (예전)
+    end_to_last_m: 0.735                # 종료선 앞쪽 끝 → 마지막 칸 가운데
+    end_check_tol_m: 0.08               # 흰선 기준과 이보다 더 다르면 종료선 기준을 씀 (경고 로그)
+    end_check_n: 3                      # 종료선을 이만큼 본 뒤 (중앙값) 멈춤
+    end_check_gate_m: 0.40              # 흰선 격자로 예상한 종료선 ± 이것 밖의 주황 가로선은 무시
+    end_stop_m: 0.45                    # 종료선을 못 봐도 차 중심이 예상 종료선 이만큼 앞에 오면 멈추고 흰선 기준으로
+    end_check_speed: 0.10
+    end_check_timeout_s: 15.0
+    bay_depth_default_m: 0.570          # 통로 가운데 → 칸 깊이 가운데 (LIMO 면을 못 쟀을 때)

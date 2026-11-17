@@ -13,3 +13,5 @@ float32 width_far_px
 float32 line_resid_px        # 슬라이딩 윈도우 곡선 피팅 잔차 [px] — 톱니 모양 지그재그 선이면 커진다 (M6). 선을 못 잡으면 0
 float32 stop_line_dist_m     # 카메라 → 정지선(가까운 쪽 끝) 바닥 거리 [m]. 없으면 -1 (BEV 0.37–0.75 m 안에서만 보임)
 float32 stop_line_cov        # 정지선이 차로 폭을 덮은 비율
+float32 end_line_dist_m      # 카메라 → 주황 가로선 (주차 통로 끝 종료선) 가까운 쪽 끝 바닥 거리 [m]. 없으면 -1 (정지선과 같은 BEV 범위)
+float32 end_line_cov         # 그 선이 차로 폭을 덮은 비율

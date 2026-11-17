@@ -44,6 +44,8 @@ class LaneResult:
     line_resid_px: float = 0.0   # 이번 프레임 SW 피팅 잔차 (채택한 선 중 큰 쪽, 픽셀 평균 |x − 곡선|). 톱니 지그재그 선이면 커진다 (M6)
     stop_row: int = -1           # 정지선(흰 가로줄) 가까운 쪽 끝의 BEV 행. 없거나 화면 아래에 걸쳐 잘리면 -1
     stop_cov: float = 0.0        # 그 줄이 차로 폭을 덮은 비율
+    end_row: int = -1            # 주황 가로줄 (주차 통로 끝 종료선) 가까운 쪽 끝의 BEV 행. 없으면 -1
+    end_cov: float = 0.0
     bev_h: int = 0               # BEV 높이 [px] (행 → 거리 환산용)
     debug: np.ndarray = field(default=None, repr=False)
 
@@ -67,7 +69,9 @@ class SlidingWindowLaneDetector:
                  sw_min_box_px=8, sw_min_boxes=3, sw_min_pixels=50, sw_max_resid_px=14.0,
                  sw_peak_min_px=40, sw_max_peaks=3, sw_cross_row_frac=0.45, sw_side_default=-1,
                  stop_line_enabled=False, stop_line_min_cov=0.9, stop_line_min_rows=10, stop_line_max_deg=15.0,
-                 stop_line_bev_depth_m=0.0, stop_line_lane_m=0.52, sw_single_normal=False):
+                 stop_line_bev_depth_m=0.0, stop_line_lane_m=0.52, sw_single_normal=False,
+                 end_line_enabled=False, end_line_hsv_lo=(5, 80, 110), end_line_hsv_hi=(40, 255, 255),
+                 end_line_min_cov=0.8, end_line_min_rows=6):
         self.roi_top_ratio = roi_top_ratio        # 프레임 하단 (1 - ratio) 부분만 사용
         self.min_pixels = min_pixels              # 한쪽을 신뢰하기 위한 최소 차선 픽셀 수
         self.single_line_offset = single_line_offset  # 차선 폭을 아직 모를 때의 폴백 offset
@@ -122,6 +126,11 @@ class SlidingWindowLaneDetector:
         self.stop_line_max_deg = stop_line_max_deg    # 정지선 기울기 한도 [deg] (바닥 기준) — 이 안에서 기울기를 바꿔 가며 찾음
         self.stop_line_bev_depth_m = stop_line_bev_depth_m  # BEV 세로 = 바닥 far − near [m] (0 이면 축척 같다고 봄)
         self.stop_line_lane_m = stop_line_lane_m            # BEV 차로 폭 lane_width_init 이 바닥에서 몇 m
+        # LIMO 추가 — 주차 통로 끝 주황 종료선 (M4 칸 격자 확인용). 정지선과 같은 방법, 색만 주황 (노랑 경계선 포함 범위)
+        self.end_line_enabled = end_line_enabled
+        self.end_line_hsv_lo, self.end_line_hsv_hi = np.array(end_line_hsv_lo), np.array(end_line_hsv_hi)
+        self.end_line_min_cov = end_line_min_cov
+        self.end_line_min_rows = end_line_min_rows
         self.reset()
 
     def reset(self, center_hint=None):
@@ -221,15 +230,17 @@ class SlidingWindowLaneDetector:
             self._prev_center = lane_center
         offset = float(self._offset_ema)
         stop_row, stop_cov = self._detect_stop_line(roi, lane_center) if self.stop_line_enabled else (-1, 0.0)
+        end_row, end_cov = self._detect_stop_line(roi, lane_center, color='end') if self.end_line_enabled else (-1, 0.0)
         debug = (self._draw_debug(roi, clean, lane_center, offset, curvature, band_windows, near_cx, la_cx, sw_locked,
                                   stop_row)
                  if draw_debug else None)
         wn, wf = self._pair_w if self._pair_w else (0.0, 0.0)
         return LaneResult(lane_found, offset, num_lanes, curvature, sw_locked, self._sw_fail, self._sw_fitrej,
-                          self._lane_width, wn, wf, self._line_side, self._line_slope, self._line_resid, stop_row, stop_cov, roi_h, debug)
+                          self._lane_width, wn, wf, self._line_side, self._line_slope, self._line_resid, stop_row, stop_cov,
+                          end_row, end_cov, roi_h, debug)
 
     # ---------------------------------------------------------------- 정지선 (LIMO 추가)
-    def _detect_stop_line(self, bev, center):
+    def _detect_stop_line(self, bev, center, color='white'):
         """BEV 컬러에서 차로를 가로지르는 흰 줄 중 가장 가까운 것의 가까운 쪽 끝 행 (차로 가운데 열에서). (행, 덮은 비율) 또는 (-1, 0).
         흰색 = white_hsv 범위에서 노랑 범위를 뺀 것 (노란 선의 옅은 픽셀 제외). 차로 가운데 ±0.45 폭 (차로 폭은 학습값 대신
         lane_width_init — 지그재그에서 학습값이 흔들려도 같은 구간을 본다). 줄이 BEV 맨 아래에 걸치면 가까운 끝이 화면 밖이라 -1.
@@ -238,8 +249,14 @@ class SlidingWindowLaneDetector:
         흰 줄 (마름모·글자 획) 은 안 잡힌다. 횡단보도 막대는 진행 방향으로 길어 덮는 비율에서 걸러진다 (~0.56)."""
         h, w = bev.shape[:2]
         hsv = cv2.cvtColor(bev, cv2.COLOR_BGR2HSV)
-        white = cv2.inRange(hsv, self.white_hsv_lo, self.white_hsv_hi)
-        white[cv2.inRange(hsv, self.yellow_hsv_lo, self.yellow_hsv_hi) > 0] = 0
+        if color == 'end':                 # 주황 종료선: 주황 범위 (흰색 뺌), 덮은 비율·두께 문턱은 따로
+            white = cv2.inRange(hsv, self.end_line_hsv_lo, self.end_line_hsv_hi)
+            white[cv2.inRange(hsv, self.white_hsv_lo, self.white_hsv_hi) > 0] = 0
+            min_cov, min_rows = self.end_line_min_cov, self.end_line_min_rows
+        else:
+            white = cv2.inRange(hsv, self.white_hsv_lo, self.white_hsv_hi)
+            white[cv2.inRange(hsv, self.yellow_hsv_lo, self.yellow_hsv_hi) > 0] = 0
+            min_cov, min_rows = self.stop_line_min_cov, self.stop_line_min_rows
         half = 0.45 * self._lane_width_init
         x0, x1 = int(max(0, center - half)), int(min(w, center + half))
         if x1 - x0 < 10:
@@ -258,7 +275,7 @@ class SlidingWindowLaneDetector:
             on_px = np.zeros(rr.shape, bool)
             on_px[ok] = sub[rr[ok], np.broadcast_to(cols, rr.shape)[ok]]
             cov = on_px.mean(axis=1)
-            on = cov >= self.stop_line_min_cov
+            on = cov >= min_cov
             r = h - 1
             while r >= 0:                  # 아래(가까운 쪽)부터 위로 첫 묶음
                 if not on[r]:
@@ -267,7 +284,7 @@ class SlidingWindowLaneDetector:
                 bottom = r
                 while r >= 0 and on[r]:
                     r -= 1
-                if bottom - r >= self.stop_line_min_rows:
+                if bottom - r >= min_rows:
                     c = float(cov[r + 1:bottom + 1].mean())
                     if best is None or bottom > best[0] + 2 or (abs(bottom - best[0]) <= 2 and c > best[1]):
                         best = (bottom, c)

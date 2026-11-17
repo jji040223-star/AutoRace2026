@@ -53,5 +53,6 @@ lane_follower:
     stop_line_enabled: true             # 정지선 검출 (흰색, 차선용 use_white 와 별개)
     stop_line_min_cov: 0.9              # 차로 가운데 0.9 폭 중 흰 픽셀 비율. 시뮬: 정지선·횡단보도 가로선 0.98–1.0, '천천히' 글자 0.74, 정차 LIMO 0.8
     stop_line_min_rows: 10              # 임시값. 줄 두께 [BEV 행] (정지선 40 mm ≈ 25, 횡단보도 가로선 30 mm ≈ 18)
+    end_line_enabled: true              # 주차 통로 끝 주황 종료선 검출 (M4 칸 격자 확인). 색은 end_line_hsv_lo/hi — 실차에서 확인할 것
     lane_cmd_timeout_s: 1.0
     speed_ramp: 0.5                     # 속도 상한 변화 [m/s²]
