@@ -53,6 +53,9 @@ parking_controller:
     slot_from_line_m: 0.745             # 주차 정지선 앞쪽 끝 → 1 번 칸 가운데 (2 번 1.265, 3 번 1.785)
     slot_line_min_m: 0.3                # 기준선 = 처음 본 LIMO 점보다 0.3~2.0 m 앞 흰 가로선 (횡단보도 뒤 가로선은 2.47 m 이상이라 빠짐)
     slot_line_max_m: 2.0
+    wait_ref_gap_m: 0.06                # 칸 격자 기준점 = 처음 본 LIMO: 점 사이가 이보다 벌어지면 다른 물체
+    wait_ref_min_len_m: 0.10            #   크기 (앞뒤·옆 중 큰 쪽) 가 이 이상인 첫 덩어리 (정지선 옆 P 표지판 기둥 2 cm 는 건너뜀)
+    slot_spec_tol_m: 0.12               # 기준점으로 선을 못 고르면 맵 규격 (LIMO 가운데 = 선 + 0.745 + k × 0.52) 에 맞는 선
     slot_match_m: 0.15                  # LIMO 가운데 ↔ 칸 가운데 이 안이면 그 칸에 LIMO
     slot_snap_max_m: 0.10               # 본 LIMO 로 칸 격자를 옮기는 최대
     slot_free_half_m: 0.20              # 빈 칸 확인 구간 = 칸 가운데 ± 이것
