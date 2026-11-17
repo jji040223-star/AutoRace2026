@@ -113,6 +113,8 @@ class ParkingController(Node):
         p('end_check_n', 3)                # 종료선을 이만큼 본 뒤 (중앙값) 멈춤
         p('end_check_gate_m', 0.40)        # 흰선 격자로 예상한 종료선 위치 ± 이것 밖에서 본 주황 가로선은 무시
         p('end_stop_m', 0.45)              # 종료선을 못 봐도 차 중심이 (예상) 종료선 이만큼 앞에 오면 멈춤 (앞 범퍼 ~0.29 m)
+        p('end_view_min_m', 0.50)          # 칸을 정했을 때 (가장 가까운) 종료선이 차 중심에서 이보다 가까우면 카메라 아래라 후진하며 찾음
+        p('end_view_max_m', 0.90)          #   후진 한도: (가장 가까운) 종료선이 이만큼 멀어질 때까지 (BEV 끝 0.75 + cam_x 0.084 + 여유)
         p('end_check_speed', 0.10)
         p('end_check_timeout_s', 15.0)
         p('bay_depth_default_m', 0.570)    # LIMO 면을 못 쟀을 때 차 중심 (통로 가운데) → 칸 깊이 가운데
@@ -299,9 +301,10 @@ class ParkingController(Node):
             if pose is not None:
                 d = msg.end_line_dist_m + self.get_parameter('cam_x').value
                 e = self.along((pose[0] + d * math.cos(pose[2]), pose[1] + d * math.sin(pose[2])))
-                exp = self.end_plan.get('e_exp')
-                if exp is not None and abs(e - exp) > self.get_parameter('end_check_gate_m').value:
-                    self.get_logger().warn(f'[M4] 주황 가로선 진행 {e:.3f} m — 예상 종료선 {exp:.3f} m 에서 멀어 무시 (덮은 비율 {msg.end_line_cov:.2f})')
+                if not self.end_ok(e):
+                    p_ = self.end_plan
+                    self.get_logger().warn(f'[M4] 주황 가로선 진행 {e:.3f} m — 예상 종료선 {p_["e_lo"]:.3f}~{p_["e_hi"]:.3f} m 밖이라 무시 '
+                                           f'(덮은 비율 {msg.end_line_cov:.2f})', throttle_duration_sec=1.0)
                 else:
                     if not self.end_meas:
                         self.get_logger().info(f'[M4] 주황 종료선 보임: 차 중심 앞 {d:.3f} m, 진행 {e:.3f} m (덮은 비율 {msg.end_line_cov:.2f})')
@@ -532,7 +535,7 @@ class ParkingController(Node):
         if self.state == 'END_CHECK' and self.end_plan is not None:
             # 종료선 확인하러 가다 막힘 (앞 장애물) — 흰선 기준 칸으로 정렬
             p = self.end_plan
-            self.set_bay(now, p['c'], p['depth'], p['nb'], f'{p["why"]}, 종료선 확인 중 막힘 ({why}) → 흰선 기준 칸 가운데')
+            self.set_bay(now, p['c'], p['depth'], p['nb'], f'{p["why"]}, 종료선 확인 중 막힘 ({why}) → 흰선 기준 칸 가운데', gap=p['gap'])
             return True
         if self.state == 'ARC_FWD':
             self.pub(0.0, 0.0)
@@ -732,7 +735,18 @@ class ParkingController(Node):
                 pr['near_d'].append(d)
                 depth = float(np.median(pr['near_d'])) + g('limo_half_l')
                 c_along = (pr['far0'] + pr['far1']) / 2
-                self.set_bay(now, c_along, depth, ('l', 'r'), f'빈 칸: LIMO 옆면 사이 {w:.3f} m', gap=w)
+                why_ = f'빈 칸: LIMO 옆면 사이 {w:.3f} m'
+                r_ = self.slot_centers() if g('random_slot') else None
+                k_, s_ = None, None
+                if r_ is not None:
+                    s_ = r_[0]
+                    k_ = min(range(len(s_)), key=lambda i: abs(s_[i] - c_along))
+                    if abs(s_[k_] - c_along) > g('slot_match_m'):
+                        k_, s_ = None, None
+                    else:
+                        why_ += f' ({k_ + 1} 번 칸)'
+                # 앞에 LIMO 가 있으니 이 칸 앞에 적어도 한 칸 더 (종료선 범위)
+                self.to_end_check(now, k_, s_, c_along, depth, ('l', 'r'), why_, gap=w, ahead_min=1)
                 return
             if w < g('gap_min_m'):
                 pr['prev_far0'] = pr['far0']   # 칸보다 짧은 틈 = 칸 안 물체일 수 있음 — 그게 짧으면 이 칸을 이어서 잼 (gap_blip_ok)
@@ -866,28 +880,39 @@ class ParkingController(Node):
                           f'빈 칸 {pick + 1}/{n} ({why}, 칸별 LIMO {["O" if o else "-" for o in occ]}, 깊이 {src})')
         return True
 
-    def to_end_check(self, now, k, s, c, depth, nb, why):
-        """흰선 (또는 LIMO) 으로 정한 칸 → end_check 면 종료선까지 가서 확인, 아니면 바로 ALIGN."""
+    def to_end_check(self, now, k, s, c, depth, nb, why, gap=None, ahead_min=0):
+        """흰선 (또는 LIMO) 으로 정한 칸 → end_check 면 종료선까지 가서 확인, 아니면 바로 ALIGN.
+        k·s = 흰선 격자의 칸 번호·격자 (없으면 None), ahead_min = 이 칸 앞 (진행 방향) 에 적어도 몇 칸이 더 있는지 (앞에 LIMO 를 봤으면 1)."""
         g = lambda k_: self.get_parameter(k_).value   # noqa: E731
         if not g('end_check'):
-            self.set_bay(now, c, depth, nb, why)
+            self.set_bay(now, c, depth, nb, why, gap=gap)
             return
-        n, pitch = int(g('slot_count')), g('slot_pitch_m')
-        # 예상 종료선 진행 거리: 흰선 격자의 마지막 칸 + end_to_last_m (격자가 없으면 이 칸이 마지막 칸이라고 보고)
-        e_exp = (s[-1] if s else c) + g('end_to_last_m')
-        self.end_plan = {'k': k, 's': list(s) if s else None, 'c': c, 'depth': depth, 'nb': nb, 'why': why, 'e_exp': e_exp}
-        if s is None:
-            self.end_plan['e_exp'] = None      # 격자 없음: 어느 칸인지 몰라 위치 거르기 안 함, 멈춤 한도는 칸 하나 더 멀리
-            self.end_plan['limit'] = c + (n - 1) * pitch + g('end_to_last_m') - g('end_stop_m')
+        n, pitch, el = int(g('slot_count')), g('slot_pitch_m'), g('end_to_last_m')
+        # 종료선이 있을 수 있는 진행 거리 범위 [e_lo, e_hi]: 격자가 있으면 마지막 칸 + el 한 점,
+        # 없으면 이 칸이 (ahead_min 만큼 앞에 칸이 있는) 가장 가까운 경우 ~ 1 번 칸인 경우
+        if s:
+            e_lo = e_hi = s[-1] + el
         else:
-            self.end_plan['limit'] = e_exp - g('end_stop_m')
+            e_lo, e_hi = c + el + ahead_min * pitch, c + el + (n - 1) * pitch
+        a = self.along()
+        # 멈춤 한도는 가장 가까운 경우 기준 (종료선을 넘지 않게). 이미 너무 가까우면 (카메라 아래로 사라짐) 후진하며 찾음
+        back = e_lo - a < g('end_view_min_m')
+        self.end_plan = {'k': k, 's': list(s) if s else None, 'c': c, 'depth': depth, 'nb': nb, 'why': why, 'gap': gap,
+                         'e_lo': e_lo, 'e_hi': e_hi, 'limit': e_lo - g('end_stop_m'), 'back': back,
+                         'back_limit': e_lo - g('end_view_max_m')}   # 후진: 가장 가까운 경우의 종료선이 BEV 끝 너머로 갈 때까지
         self.end_meas = []
         self.pub(0.0, 0.0)
-        self.set_state('END_CHECK', f'{why} — 흰선 기준 칸 가운데 진행 {c:.3f} m, 통로 끝 주황 종료선 확인하러 감 '
-                                    f'(예상 진행 {e_exp:.3f} m, 지금 {self.along():.3f})')
+        rng = f'{e_lo:.3f}' if e_lo == e_hi else f'{e_lo:.3f}~{e_hi:.3f}'
+        self.set_state('END_CHECK', f'{why} — 흰선 기준 칸 가운데 진행 {c:.3f} m, 통로 끝 주황 종료선 확인 '
+                                    f'(예상 진행 {rng} m, 지금 {a:.3f}, {"너무 가까움 → 후진하며 찾음" if back else "전진"})')
+
+    def end_ok(self, e):
+        """본 주황 가로선 진행 거리 e 가 종료선일 수 있는 범위 안인지."""
+        p, gate = self.end_plan, self.get_parameter('end_check_gate_m').value
+        return p['e_lo'] - gate <= e <= p['e_hi'] + gate
 
     def do_end_check(self, now):
-        """종료선이 보일 때까지 전진 (IMU 방향 유지) → 종료선 기준 칸 가운데와 비교해 ALIGN."""
+        """종료선이 보일 때까지 전진 (너무 가까우면 후진, IMU 방향 유지) → 종료선 기준 칸 가운데와 비교해 ALIGN."""
         g = lambda k_: self.get_parameter(k_).value   # noqa: E731
         p = self.end_plan
         n, pitch = int(g('slot_count')), g('slot_pitch_m')
@@ -901,19 +926,22 @@ class ParkingController(Node):
             if abs(diff) > g('end_check_tol_m'):
                 self.get_logger().warn(f'[M4] 종료선 기준 {k + 1} 번 칸 가운데 {s_end[k]:.3f} m ↔ 흰선 기준 {c:.3f} m: '
                                        f'{diff * 100:+.1f} cm 다름 (> {g("end_check_tol_m") * 100:.0f} cm) → 종료선 값 씀')
-                c, src = s_end[k], f'종료선 기준 (흰선과 {diff * 100:+.1f} cm)'
+                c, src = s_end[k], f'종료선 기준 {k + 1} 번 칸 (흰선과 {diff * 100:+.1f} cm)'
             else:
                 src = f'흰선 기준 (종료선과 {diff * 100:+.1f} cm, 맞음)'
-            self.set_bay(now, c, p['depth'], p['nb'], f'{why}, 칸 가운데 {src}')
+            self.set_bay(now, c, p['depth'], p['nb'], f'{why}, 칸 가운데 {src}', gap=p['gap'])
             return
-        if self.along() >= p['limit'] or now - self.phase_t > g('end_check_timeout_s'):
-            self.get_logger().warn(f'[M4] 주황 종료선을 못 봄 (본 장 수 {len(self.end_meas)}, 진행 {self.along():.3f} / 한도 {p["limit"]:.3f} m, '
-                                   f'{now - self.phase_t:.1f} s) → 흰선 기준 칸 가운데 그대로')
-            self.set_bay(now, c, p['depth'], p['nb'], f'{why}, 칸 가운데 흰선 기준 (종료선 못 봄)')
+        a = self.along()
+        over = a <= p['back_limit'] if p['back'] else a >= p['limit']
+        if over or now - self.phase_t > g('end_check_timeout_s'):
+            lim = p['back_limit'] if p['back'] else p['limit']
+            self.get_logger().warn(f'[M4] 주황 종료선을 못 봄 (본 장 수 {len(self.end_meas)}, {"후진" if p["back"] else "전진"} 진행 {a:.3f} / '
+                                   f'한도 {lim:.3f} m, {now - self.phase_t:.1f} s) → 흰선 기준 칸 가운데 그대로')
+            self.set_bay(now, c, p['depth'], p['nb'], f'{why}, 칸 가운데 흰선 기준 (종료선 못 봄)', gap=p['gap'])
             return
         w = 1.5 * wrap(self.h0 - self.heading())
-        v = g('end_check_speed')
-        if self.stuck(now, v, w):
+        v = -g('end_check_speed') if p['back'] else g('end_check_speed')
+        if self.stuck(now, abs(v), w):
             return
         self.pub(v, max(-0.4, min(0.4, w)))
 
